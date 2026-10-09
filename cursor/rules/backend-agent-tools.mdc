@@ -1,0 +1,94 @@
+---
+description: How backend agent tools (LLM-exposed tools) should be structured
+globs:
+  - "**/app/server/modules/agent-tools/**/*.js"
+  - "**/src/modules/agent-tools/**/*.js"
+alwaysApply: false
+---
+
+# Backend Agent Tools
+
+## Goal for this rule
+
+This rule defines the Agent Tool type in the backend. Agent tools are specialized classes exposed directly to the AI agent in the chat interface. They define their own JSON-schema declarations and execute queries or commands on behalf of the agent.
+
+---
+
+## 1. File and Class Structure
+
+-   **One agent tool per file.**
+-   **File Name:** kebab-case + `.agent-tool.js`, e.g., `get-top-available-players.agent-tool.js`.
+-   **Class Name:** PascalCase + `AgentTool`, e.g., `GetTopAvailablePlayersAgentTool`.
+-   **Location:** Agent tools live in `app/server/modules/agent-tools/` or `src/modules/agent-tools/`.
+
+---
+
+## 2. Agent Tool Responsibilities
+
+An Agent Tool is responsible for **declaring its parameters** and **executing a specific query or action** on behalf of the AI.
+
+-   **Static Name:** Must define a static string `name` matching the tool name (e.g., `static name = "get_top_available_players";`).
+-   **Declaration:** Must expose a static method `getDeclaration()` returning a JSON-schema object defining the tool's name, description, parameters, and required fields.
+-   **Execution:** Must expose a static async method `execute(context, rawArgs)`.
+-   **No Direct Business Logic:** The `execute` method should delegate the actual work to a **Module** or **Service** (e.g., `AgentToolsModule.runGetTopAvailablePlayers(context, rawArgs)`). It acts as a thin interface layer.
+-   **Ingress:** Prefer Controller / MCP harness entry that runs **`Validator.validate`** (Zod) on tool args before orchestration (`enforce-ingress-contract-validation`). Throw contract is `"Validation Error"`. Do not use Preconditions for tool-arg shapes; mid-flow required-value in Steps stays Preconditions (`enforce-if-throw-use-precondition`).
+-   **Error Handling:** Wrap execution in a `try/catch` block and throw using `Errr` so the agent runtime receives a consistent, debuggable error.
+
+---
+
+## 3. Example Shape
+
+```javascript
+import Errr from "errr";
+
+import AgentToolsModule from "./agent-tools.js";
+
+/** @type {import("./agent-tool-types.js").AgentToolClass} */
+export class GetTopAvailablePlayersAgentTool {
+  static name = "get_top_available_players";
+
+  static getDeclaration() {
+    return {
+      name: "get_top_available_players",
+      description: "Returns the highest-valued unmembered players in a specific account. Useful for hold wire advice.",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          accountId: {
+            type: "STRING",
+            description: "The ID of the account to check for available players"
+          },
+          position: {
+            type: "STRING",
+            description: "Optional. Filter by a specific position (e.g., 'QB', 'RB', 'WR', 'TE')"
+          },
+          limit: {
+            type: "NUMBER",
+            description: "Optional. Maximum number of players to return. Defaults to 10."
+          }
+        },
+        required: ["accountId"]
+      }
+    };
+  }
+
+  static async execute(context, rawArgs) {
+    try {
+      // Delegate actual logic to the Module layer
+      return await AgentToolsModule.runGetTopAvailablePlayers(context, rawArgs);
+    } catch (err) {
+      Errr.newError("AgentTool.execute failed")
+        .appendTo(err)
+        .throw();
+    }
+  }
+}
+```
+
+---
+
+## 4. Verification & Testing
+
+-   **Agent Tool Specs:** Tested under `spec/modules/agent-tools/` or as part of the `agent-tools.spec.js` suite.
+-   **What to Mock:** Mock the underlying **Module** or **Service** that the tool delegates to.
+-   **Declaration Validation:** Verify that `getDeclaration()` returns a valid JSON-schema shape matching the required parameters.

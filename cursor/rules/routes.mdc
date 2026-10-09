@@ -1,0 +1,64 @@
+---
+description: How route files (loaders, actions, and page component) should be structured
+globs:
+  - "**/app/routes/**/*.{jsx,tsx,js}"
+  - "**/src/routes/**/*.{jsx,tsx,js}"
+alwaysApply: false
+---
+
+# Route files
+
+## Goal for this rule
+
+This rule is defined so code can be written **exactly** as intended, with no feedback. When you receive feedback from the user, treat it as a signal to **update this rule** (and any related rules) so that next time you know precisely how they want things—no guesswork, no back-and-forth.
+
+**ui:** Route files are **Routers** (HTTP verb/path + RR chrome). They delegate to an **`app/server/controllers/*` Controller**, which owns State construction, one Service call, return-from-state, and catch/Errr/log. Canonical pilot: `actions.jsx` → `ActionsHubController`. Legacy routes that still do State + Service in the route remain legal until migrated.
+
+Sync/lambda packages keep Controller as SQS/CLI ingress (see `backend-controllers.mdc`); their `routes.js` maps event type → Controller method.
+
+All business logic lives in steps, executed by the service—not in the route or controller beyond orchestration.
+
+## Loaders and actions (UI Remix Router)
+
+**Preferred (thin Router):**
+
+1. Optional **HTTP verb / pathname** guard only (e.g. non-POST → 405).
+2. **`return ControllersX.method(args)`** — one Controller call. No `new *State`, no `*Service`, no try/catch on the route (Controller owns catch).
+
+```js
+export async function loader(args) {
+  return ActionsHubController.getActionsHub(args);
+}
+```
+
+**Controller** (`app/server/controllers/`): create State from `args`, **`Validator.validate` (Zod) on ingress** before the Service (`enforce-ingress-contract-validation`), `await MatchingService.sameName(state)`, return from state, try/catch + Errr + `LoggerProxy.error`. Routes do not own Zod ingress.
+
+**Legacy (until migrated):** create state → one Service method → return from state, with try/catch + Errr on the route. Still enforced by `enforce-controller-orchestration`.
+
+**Do not** put business logic in the route. No `if` / `switch` that implements domain rules. No `new URL`, search-param parsing, path regex, or front-end key helpers. No `request.json()` / `request.formData()` — a Step calls `state.parseRequestBody()` or `state.setFormData()`.
+
+**Ingress maps only for HTTP verb or pathname.** Do not peek `intent` (or querystring) and pick a Service/Controller method — even outside `try`. Body/query routing is a Dispatch Step → **Module** methods (`intent-to-module-method`) and/or a Step **Strategy** for leaf writes. Decision table: `steps-pattern/docs/llm/framework/routing-dispatch-choice.md`. Auth and OPTIONS preflight belong in `rootAuthMiddleware`, not the route.
+
+How-to-fix for a real assembled DTO: `format-response-in-step/` (Format* Step inside the Service). Pathname redirects: `redirect-layout-index-in-step/`. Second Service: `fold-second-service-into-accept-chain/`. Splat 404: `return-static-not-found/`. Thin Router: `route-calls-controller/`.
+
+**Paint-only leaves omit the loader.** Canonical: `accounts.$accountId.overview.jsx`. Index shells (`periods._index`, `member._index`) also omit the loader.
+
+## Page component (default export)
+
+- **Ideally, the route file’s default export only instantiates a single component.** All UI lives in the components / features directories, not in the route file.
+- Pass loader/action data and route params as props into that component.
+
+## Error boundaries
+
+- Prefer delegating to a shared ErrorBoundary component so the route file doesn’t contain error UI.
+
+## Other route exports
+
+- Other route exports (`meta`, `links`, `handle`) are fine; keep them pure (no business logic).
+
+## Summary
+
+- **UI loaders/actions (preferred):** verb/path guard → `return *Controller.*(args)`.
+- **Controller:** State → one Service → return from state; catch + Errr + log.
+- **Intent:** Module and/or Strategy via a Dispatch Step — never Router/Controller maps.
+- **Page component:** Ideally one component; UI in front-end features/primitives.

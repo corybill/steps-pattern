@@ -1,0 +1,142 @@
+---
+description: How API/backend steps should be structured in this project
+globs:
+  - "**/app/server/steps/**/*.js"
+  - "**/src/steps/**/*.js"
+alwaysApply: false
+---
+
+# Backend step style
+
+## Goal for this rule
+
+This rule is defined so code can be written **exactly** as intended, with no feedback. When you receive feedback from the user, treat it as a signal to **update this rule** (and any related rules) so that next time you know precisely how they want things—no guesswork, no back-and-forth.
+
+## File and class
+
+- One step per file.
+- **All steps live in the top-level `app/server/steps/` directory**, regardless of whether they're invoked by a service, a module, or a route. This keeps steps reusable across the codebase. Modules do not have their own `steps/` subdirectory.
+- **No "Step" in names**: Step class names and file names must NOT contain the word "Step" or "-step" (either as suffix, prefix, or any where else).
+  - ❌ BAD: `GetAccountsStep` or `get-accounts.js`
+  - ✅ GOOD: `GetAccounts` or `get-accounts.js`
+- **Core class matches file name**: The core class name in a step file must match the file name exactly (using PascalCase for the class name and kebab-case for the file name).
+  - e.g. class `GetAccounts` in `get-accounts.js`
+- File name: kebab-case, e.g. `get-auth.js`, `load-account-data-from-module.js`.
+- Class name: PascalCase, descriptive of the action, e.g. `GetAuth`, `LoadAccountDataFromModule`.
+- Export only the step class: `export default StepName;`
+- **Max file length**: A Step file must not exceed **250** physical lines (`steps-pattern/enforce-step-max-file-lines`; option `max`, target **180**). Comments and blanks count. **How to fix:** name the Gang of Four pattern first (`docs/llm/framework/gang-of-four.md`) — then (1) no collection — Template Method: `steps-pattern/docs/llm/lint-fixes/enforce-step-max-file-lines/split-into-sequential-steps/` (`acceptAll` independent phases; sequential `accept` only at data-dependency barriers); (2) looping — Iterator + Composite: `steps-pattern/docs/llm/lint-fixes/enforce-step-max-file-lines/extract-loop-into-module/` (Module method accepts 2+ Steps; batch Step `Promise.all`s independent items). Do not shrink with `_helpers`. Do not delete comments to sneak under the cap. Do not serialize independent siblings “so the split is simple.”
+
+## Interface
+
+- Steps expose a single **static async** method: **`next(state)`**.
+- They do not accept other parameters; all input and output goes through `state`. **A step never returns a value; it only writes into state.**
+
+## Business logic and scope
+
+- **Business logic belongs in steps, not in services.** A step is where you implement a single concern or a small, cohesive set of concerns.
+- Ideally a step does **one thing**. It can do more than one thing when those things are tightly related and keeping them in one step is clearer than splitting.
+- **Do not loop a same-file function.** `items.map((item) => ThisClass._processItem(item))` is an error (`enforce-no-step-loop-internal-function`). Loop `*Module.method`, or inline the body into `next`. Recipes: `docs/llm/lint-fixes/enforce-no-step-loop-internal-function/`.
+- **ALWAYS `Promise.all` independent Module items.** `await Promise.all(items.map(item => Module.method(...)))`. Serial `for-await Module.method` only when items share in-place mutation, require write order, or have a dossier-documented rate-limit.
+- **Outbound (proxy/repo) inside a Step loop is forbidden.** If you need to repeat the same outbound sequence (for each transaction, account, page), put the per-item sequence in a **Module** and have the batch Step `Promise.all` `Module.method(...)` (or call the Module). In-memory loops with no outbound await are fine.
+- **Independent reads (fetch-then-process):** when the loop only races the same Proxy (week GETs, a pair of S3 presigns) and attach/flatten happens after, use `await Promise.all(items.map(item => Proxy.method(...).then(...)))` — no `async`/`await` inside `map`. A Module is ceremony. Recipe: `steps-pattern/docs/llm/lint-fixes/enforce-step-iterator-simplicity/fetch-then-process/`.
+- Keep steps focused: if a step grows into many responsibilities, consider splitting it into multiple steps.
+
+## Leaving the process: use a proxy or repository layer
+
+- Whenever a step makes calls that **leave the process** (HTTP, database, external APIs, file I/O, etc.), it must do so through a **proxy** or **repository**, not by calling external libraries or DB clients directly from the step.
+- **Persistence (Postgres):** Steps call **repositories** under `sync/src/repositories/` for reads and writes. Steps must not call `PostgresProxy` or use `Prisma` directly.
+- **External APIs / Auth:** Steps use **Proxies** (e.g. `AuthProxy` for auth, `PartnerProxy` for Partner API) or **Modules** for non-database outbound calls when appropriate.
+- The step’s job is to orchestrate and apply business logic; proxies and repositories talk to the outside world.
+- **NEVER write through a repository inside a loop** (`for`, `while`, `map`, `forEach`, `Promise.all` over iterators, or a same-file helper called from a loop). Collect rows in memory, then call **one** bulk repository method (`upsertMany`, `upsertAll`, `saveAll`, …) outside the loop. Enforced by `steps-pattern/enforce-no-repo-writes-in-loops`.
+- That bulk method is **not** a loop of Prisma `upsert()` relocated into the repository. The repository must persist the collected rows in **one (or chunked) parameterized SQL statement** — typically `INSERT … SELECT * FROM unnest($1::type[], …) ON CONFLICT … DO UPDATE`, or `UPDATE … FROM unnest($1::type[], …)`. See `backend-repositories.mdc`. Loops over chunks / `$transaction` are allowed **inside repositories**; interpolating values into SQL strings (`VALUES ('${id}', …)`) is not.
+
+## Error handling & Short-Circuiting
+
+- **No `isDone` or `setDone`**: Steps must NEVER call `state.setDone(true)` or check `state.isDone()`. Guard clauses like `if (state.isDone()) return;` are forbidden anti-patterns.
+- **Throwing Responses & Redirects**: In web request pipelines (loaders, actions, middleware), steps should short-circuit by throwing a `Response` or `redirect` directly.
+- **Errr First-One-Wins Properties**: To drive flow-specific error handling, steps can set custom properties on `Errr` using `.set(key, value)` (e.g., `.set("errResponse", Response.json(...))` or `.set("shouldFailWithRedirect", { pathname: "/sign-in" })`). Because `.appendTo(err)` preserves existing properties, the deepest property wins.
+- **`next(state)` must be wrapped in try/catch + Errr** (`enforce-step-structure`). Even a thin step wraps and rethrows: `Errr.newError("Could not ...").appendTo(err).debug({ ... }).throw()`. Do not ship a `next` with no try/catch.
+- Steps should use **Preconditions** (`Preconditions.errr().shouldBe*(…).debug({…}).test()`) for **trusted-pipeline invariants** (required values after a read, entity existence after a load). Lint: `steps-pattern/enforce-if-throw-use-precondition` — do not write `if (!x) throw new Error` / `Errr.newError` for those checks.
+- **Zod / `Validator.validate` is not for Step invariants.** Use Zod only on **Parse*** body Steps and Catalog / MCP tool-arg schemas (untrusted structured payload). Throw contract there is `"Validation Error"`. Mid-flow required-value asserts stay Preconditions.
+- **Do not re-validate Controller or Module ingress contracts in Steps.** If a Controller/`Validator.validate` (or Module method ingress Zod) already normalized `toolCall.args`, request body, or `context`, Steps must not `safeParse` / Preconditions the same fields again. Keep Step checks for authz, catalog/domain soft-fails, entity existence after a load, and path/format rules that ingress does not cover.
+- When catching, include `.debug({ ... })` with relevant state (e.g. `accountId`, `userId`, `service`) to make debugging easier. Prefer keys not already on ALS/`runWithContext` when Errr guidance says so.
+- **Never set errors in state:** Do not use `state.setError()`. Always throw errors or use `preconditions.test()` to trigger an error.
+
+## Imports
+
+- Import `Errr` when the step uses it for error handling.
+- Import proxies and repositories as needed; keep direct external calls behind these layers.
+
+## Example shapes
+
+**Minimal step (try/catch + Errr required):**
+
+```js
+import Errr from "errr";
+
+import AuthProxy from "../proxies/auth-proxy";
+
+class GetAuth {
+  static async next(state) {
+    try {
+      const args = state.getArgs();
+      const auth = await AuthProxy.getAuth(args);
+      state.setAuth(auth.sessionClaims);
+      state.setIsAuthenticated(!!auth?.sessionClaims?.userId);
+    } catch (err) {
+      Errr.newError("Could not get auth.")
+        .appendTo(err)
+        .throw();
+    }
+  }
+}
+
+export default GetAuth;
+```
+
+**Step with business logic and proxy/entity, with error handling:**
+
+```js
+import Errr from "errr";
+import Users from "../repositories/users";
+
+class UpdateUserPartnerId {
+  static async next(state) {
+    try {
+      const auth = state.getAuth();
+      const accountUserId = state.getAccountUserId();
+      if (!auth?.userId || !accountUserId) return;
+
+      await Users.update({
+        userId: auth.userId,
+        memberId: String(accountUserId)
+      });
+    } catch (err) {
+      Errr.newError("Could not update user with partner user id")
+        .appendTo(err)
+        .debug({ userId: state.getAuth()?.userId, accountUserId: state.getAccountUserId() })
+        .throw();
+    }
+  }
+}
+
+export default UpdateUserPartnerId;
+```
+
+**Step that does one thing with state only (no out-of-process call):**
+
+```js
+import Errr from "errr";
+
+class SetFormData {
+  static async next(state) {
+    try {
+      await state.setFormData();
+    } catch (err) {
+      Errr.newError("Could not set form data.").appendTo(err).throw();
+    }
+  }
+}
+
+export default SetFormData;
+```

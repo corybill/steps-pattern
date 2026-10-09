@@ -1,0 +1,121 @@
+---
+description: How backend controllers (SQS, CLI, and lambda entry points) should be structured
+globs:
+  - "**/app/server/controllers/**/*.js"
+  - "**/src/controllers/**/*.js"
+  - "**/src/lambda.js"
+  - "**/src/main.js"
+  - "**/src/routes.js"
+alwaysApply: false
+---
+
+# Backend Controllers
+
+## Goal for this rule
+
+This rule defines the Controller type in the backend. Controllers are the entry points for non-HTTP triggers (such as SQS queues, CLI commands, S3 events, scheduled lambdas, or Electron IPC channels). They map incoming payloads to state objects, orchestrate execution via services, and handle errors/logging.
+
+---
+
+## 1. File and Class Structure
+
+-   **One controller per file.**
+-   **File Name:** kebab-case, e.g., `partner-sync-controller.js`.
+-   **Class Name:** PascalCase + `Controller`, e.g., `PartnerSyncController`.
+-   **Export:** Export the class directly (e.g., `export class PartnerSyncController { ... }` or `export default PartnerSyncController;`).
+-   **Agent-tools:** MCP tool ingress lives here even though there is no SQS/lambda. `Execute*ToolController.execute(state, toolCall)` copies args onto state, calls `Execute*ToolService.execute(state)`, and returns `state.getResult()`. Re-export `Execute*Tool` as an alias so package/MCP names stay stable.
+-   **Agent runtime:** HTTP host ingress lives here. `createAgentServer` routes to Controllers. Controllers receive an already-built `AgentTurnState` (SSE `writeChunk` is host-bound), call the matching Service method, and return from state. `AgentTurnPersistService` stays a Service (registry-internal, not HTTP ingress).
+-   **Browser extension:** Extension message / content-script ingress lives here. Payload is the message body; empty-ok status methods validate `undefined|null|object` without coalescing into `Validator`.
+-   **app Electron:** IPC channel ingress lives here. `src/main.js` is the host (like `lambda.js`): it maps `channel` through `src/routes.js` to one Controller method and holds no business logic. Payload is the invoke body; empty-ok methods validate `undefined|null|object` without coalescing into `Validator`.
+
+---
+
+## 2. Controller Responsibilities
+
+A controller's job is strictly limited to **entry-point orchestration, state instantiation, and top-level error wrapping**. It is legally forbidden from containing business logic, database queries, or direct entity calls.
+
+### Ingress by trigger (path / body equivalents)
+
+| Trigger | What to validate | API |
+| :--- | :--- | :--- |
+| Remix HTTP | path params if present; body if present (parse once → state); else request-exists (`z.custom` Request) | `validate` |
+| SQS / S3 | payload/record = body; require `type` / required keys | `validate` unless schema uses `.preprocess` / coerce → then **`validateParsed`** |
+| Chrome message | payload = body; no `payload ?? {}` into Validator | `validate`; optional empty payloads: schema accepts `undefined\|null\|object`, then build State with a fallback **after** validate |
+| Electron IPC (app) | channel payload = body; no `payload ?? {}` into Validator | `validate`; optional empty payloads: schema accepts `undefined\|null\|object`, then build State with a fallback **after** validate |
+| Host State (agent-runtime) | extract required fields from state into a plain DTO and validate | `validate` |
+| MCP tool args | tool-arg DTO clone | `validateParsed` |
+| Zero-arg (e.g. ContentPartner) | explicit no-payload check | `Validator.validate(z.object({}), {}, { method })` before Service |
+
+### The Standard Controller Flow:
+1.  **Sensing / Input Normalization:** Receive the raw payload and context (e.g., SQS metadata like `messageId`, `body`). Call `Validator.validate(schema, payload, debug)` on its **own line** (do not nest it in `new State(...)`). Lint: `steps-pattern/enforce-ingress-contract-validation` — every Controller method with ingress params must use `Validator.validate` or `Validator.validateParsed` (Zod) before the Service call. **`validate` returns the same input reference** (assert-only — no Zod clone). Use `Validator.validateParsed` when you intentionally want Zod's DTO clone (MCP tool-arg Controllers, or SQS schemas with `.preprocess`). Do not use Preconditions for Controller ingress. The reverse also holds: do **not** use `Validator` / Zod for Step / Strategy / Service / Module mid-flow required-value invariants — that is `Preconditions.errr().debug().test()` (`enforce-if-throw-use-precondition`). Remix `request` must use `z.custom` (not `z.object().passthrough()`). Pass the raw value into `Validator.validate` / `validateParsed` — do not coalesce `null` → `{}` (`?? {}` / `|| {}` are lint-banned). Follow the ingress table above for path/body equivalents.
+2.  **State Instantiation:** Instantiate a flow-specific State class with that validated object (same identity as ingress for `validate`; Zod clone for `validateParsed`).
+3.  **Service Invocation:** Call the corresponding Service class static method, passing in the state.
+4.  **Result Extraction:** Read the summary or result from the state, log it, and return it.
+5.  **Error Wrapping:** Wrap validation, state construction, and the service call in one `try/catch`. `Validator.validate` / `validateParsed` throws `"Validation Error"`; it must stay inside the `try` so the catch still wraps, logs, and rethrows. In `catch`, use `Errr` to append the error, log with `LoggerProxy.error`, and rethrow. Do **not** restate fields already on `LoggerProxy.runWithContext` (e.g. `user_id`, `partner_account_id`, `message_id`, `message_type`) in Errr `.debug` or Validator debug — ALS already merges those into logs. Never `console.log` / `console.error`.
+
+### Lambda dispatch (required)
+- Every SQS (or SQS-shaped) payload **must** include `type`.
+- Every `lambda.js` **must** import `./routes.js` and dispatch `routes[payload.type].run(payload, context)`. Never call a controller directly from `lambda.js`.
+- Unknown types: set metric status `unknown_type`, `LoggerProxy.warn("Unknown event type", { type })`, do not throw.
+- `routes.js` maps each `TYPE` string to one controller method. Adding a type without a route is an unknown-type, not a silent no-op in a new `if`.
+- Per-record metrics (`sqs_message` and any `MetricsProxy.capture` during the record) **must** include `message_type` (the payload `type`). Bind it on ALS for the record.
+- `lambda_execution` is batch-scoped. Do **not** put a per-message `message_type` on it (`null`).
+
+---
+
+## 3. Example Shape
+
+```javascript
+import Errr from "errr";
+import { z } from "zod";
+
+import LoggerProxy from "../proxies/logger-proxy.js";
+import { PartnerSyncService } from "../services/partner-sync-service.js";
+import PartnerSyncState from "../state/partner-sync-state.js";
+import { Validator } from "../validator.js";
+
+const accountSyncPayloadSchema = z.object({
+  type: z.literal("FULL_LEAGUE_SYNC"),
+  userId: z.string(),
+  sport: z.string().optional(),
+  season: z.string().optional(),
+});
+
+export class PartnerSyncController {
+  
+  static async loadAllPublicAndPrivateData(payload, context = {}) {
+    const { messageId, body } = context;
+
+    try {
+      const normalized = Validator.validate(accountSyncPayloadSchema, payload, {
+        eventType: "FULL_LEAGUE_SYNC",
+      });
+      const state = new PartnerSyncState(normalized);
+      await PartnerSyncService.loadAllPublicAndPrivateData(state);
+      
+      // 3. Extract and return summary
+      const summary = state.getImportSummary();
+      LoggerProxy.debug("[sync] Complete. Summary:", summary);
+      return summary;
+      
+    } catch (err) {
+      // 4. Wrap error with debug context, log, and rethrow
+      const error = Errr.newError("Failed to process sync SQS record")
+        .appendTo(err)
+        .debug({ messageId, body })
+        .get();
+
+      LoggerProxy.error("Failed to process sync SQS record", { messageId }, error);
+      throw error;
+    }
+  }
+}
+```
+
+---
+
+## 4. Verification & Testing (Maddox Controller Coverage)
+
+-   **Maddox Entry-Point Coverage:** Every public static method on an exported controller class **must** have its own Maddox suite with `.withEntryPoint(<ControllerClass>, "<methodName>")`.
+-   **What to Mock:** Mock entities / repositories / proxies / modules that **steps** call. The Service and Steps run for real (`enforce-no-service-entry-point-in-maddox-spec`, `enforce-no-step-mock-in-maddox-test`).
+-   **Never mock the Service** in a controller spec. Never mock `PostgresProxy`.

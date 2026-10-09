@@ -1,0 +1,77 @@
+---
+description: How persona-based orchestration and user flow components (Features) should be structured
+globs:
+  - "**/app/front-end/features/**/*.{jsx,tsx}"
+alwaysApply: false
+---
+
+# Front-End Features
+
+## Goal for this rule
+
+This rule defines the Feature component type in the front-end (e.g., `AdminHub`, `PlayersHub`, `AdminPlayerLinksReview`). Features are persona-based orchestrations of user flows, complex layouts, and state management. They are the "organisms" of the system.
+
+---
+
+## 1. Feature Component Responsibilities
+
+-   **Persona & Flow Orchestration:** Features represent a specific user flow or dashboard (e.g., a admin managing account payments, or an admin reviewing player links).
+-   **Composition:** Features compose **Primitives** (for layout) and **Domain Components** (for business objects).
+-   **State Management:** Features manage local UI state (e.g., active tab selection, modal open states, search query filters).
+-   **Data Ingress:** Features read data loaded from the server via Remix's `useLoaderData()` or `useActionData()`, which is passed down from the route.
+-   **Action Ingress:** Features handle user interactions and trigger form submissions, Remix fetchers, or front-end proxies to send data back to the server.
+-   **No Direct Database Access:** Features must never talk to the database or run backend steps. They communicate with the backend strictly via HTTP forms, fetchers, or front-end proxies.
+
+---
+
+## 2. Example Shape
+
+```jsx
+import React, { useState } from "react";
+import { useFetcher } from "@remix-run/react";
+
+import { Card } from "@/front-end/primitives/card.jsx";
+import { Button } from "@/front-end/primitives/button.jsx";
+import { AccountRow } from "@/front-end/domain/accounts/account-row.jsx";
+
+export const AdminHub = ({ accounts }) => {
+  const fetcher = useFetcher();
+  const [selectedAccountId, setSelectedAccountId] = useState(null);
+
+  const handleSync = (accountId) => {
+    fetcher.submit(
+      { action: "sync-account", accountId },
+      { method: "post", action: "/actions" }
+    );
+  };
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Admin Hub</h1>
+      <Card className="p-6">
+        <div className="divide-y divide-slate-100">
+          {accounts.map((account) => (
+            <div key={account.accountId} className="py-4 flex items-center justify-between">
+              <AccountRow account={account} />
+              <Button 
+                onClick={() => handleSync(account.accountId)}
+                loading={fetcher.state === "submitting"}
+              >
+                Sync Data
+              </Button>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+};
+```
+
+---
+
+## 3. Verification & Testing (RemixScenario Validation)
+
+-   **RemixScenario Tests:** Features are tested inside the route's spec file (`spec/app/routes/**/*.spec.jsx`) using `Maddox.scenarios.FrameworkRouteScenario` (alias `RemixScenario`).
+-   **Data Point Validation:** Tests must validate that **99% of data points** received from the server are rendered in the UI as expected (e.g., verifying that the account names, sync statuses, and buttons are visible).
+-   **Event Validation:** Every event trigger (like clicking the "Sync Data" button) must have an explicit test scenario that validates the data is sent all the way to the correct mocked repository or proxy boundary.

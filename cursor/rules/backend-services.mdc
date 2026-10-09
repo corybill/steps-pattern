@@ -1,0 +1,107 @@
+---
+description: How API/backend services should be structured in this project
+globs:
+  - "**/app/server/services/**/*.js"
+  - "**/src/services/**/*.js"
+alwaysApply: false
+---
+
+# Backend service style
+
+## Goal for this rule
+
+This rule is defined so code can be written **exactly** as intended, with no feedback. When you receive feedback from the user, treat it as a signal to **update this rule** (and any related rules) so that next time you know precisely how they want things—no guesswork, no back-and-forth.
+
+## File and class
+
+- One service per file.
+- File name: kebab-case, e.g. `account-service.js`, `user-service.js`.
+- Class name: PascalCase + `Service`, e.g. `AccountService`, `UserService`.
+- Export only the service class: `export default ServiceName;`
+- **Agent-tools:** public MCP ingress is the Controller. `Execute*Service.execute(state)` only — the Controller copies `toolCall` onto state. Keep package export keys and `Execute*.execute(state, toolCall)` as Controller aliases. Catalog/harness glue stays in `src/modules/`.
+- **Agent runtime:** public HTTP ingress is the Controller. `*Service.<method>(state)` only — the host router builds `AgentTurnState` and the Controller calls the Service. Persist stays Service-only (called from `AgentSessionProxy` consume / queue).
+
+## Imports
+
+- Import `Errr` first.
+- Then import steps from `../steps/...` (or the correct relative path). One import per step; no step logic in the service file.
+
+## Methods & Orchestration
+
+- Orchestration methods are **static async** and receive **`state`** as the first (and only) argument (e.g. `static async getAuth(state)`). `enforce-service-orchestration` only inspects `static async` methods and requires that first param be named `state`. A rare non-async predicate (e.g. `UserService.isAdmin`) is allowed if it does no step orchestration.
+- All variables coming in during actions and loaders should be put into state and passed into the service; the service does not accept other orchestration parameters.
+- Orchestrate with `state.accept(StepClass)` or `state.acceptAll([StepClass, ...])`. **`acceptAll` is `Promise.all`.** ALWAYS race Steps that can run together. Sequential `await state.accept(A); await state.accept(B)` only when B reads state A wrote. Two independent loads → `acceptAll([LoadA, LoadB])`. Load → transform → persist stays sequential. Do not serialize independent Steps for readability.
+- **No Zod / `Validator.validate` on Services.** Untrusted ingress is the Controller (or Module method ingress). Services only orchestrate.
+- **Flat try body only** (matches `steps-pattern/enforce-service-orchestration`): inside `try`, only `await state.accept` / `acceptAll`, `state.set*`, logging, `preconditions`, variable declarations, and (for modules) returns. **No `if` / `else` / `switch` / loops** in the Service or Module method. Branching belongs elsewhere:
+  - HTTP **verb** / pathname → map at route, controller, or middleware to a **different Service method** (each method is a flat accept list).
+  - Body/query **intent** → Dispatch Step → Module method (or Strategy for a leaf write).
+  - Skip / phase gates → Call Step that early-returns, or a Module phase entered via `accept(Call…)`; never `if (state.getX()) accept…` in the Service.
+  - Never `if (state.isDone())` / `setDone` — that anti-pattern is banned.
+- Keep methods short: one clear flow of steps per method.
+- The service may or may not return a value; the route (or caller) reads from state to build the response.
+- How-to-fix recipes: `steps-pattern/docs/llm/lint-fixes/enforce-service-orchestration/`.
+
+## Testing
+
+- **NEVER write a Maddox suite for a service.** The entry point is always the **route** or **controller** that calls it (`enforce-no-service-entry-point-in-maddox-spec`, `enforce-maddox-controller-coverage`). `enforce-maddox-module-coverage` does not apply to `/services/`.
+- Cover the accept chain from the route/controller scenario (service runs for real). Steps the service accepts get their own `withEntryPoint(Step, "next")` suites. Modules that steps call get module suites.
+
+## Error handling
+
+- Wrap the step sequence in **try/catch**.
+- **First-One-Wins Error Handling**: In **catch**, check if the caught error contains custom properties set by steps (e.g., `err.get("errResponse")` or `err.get("shouldFailWithRedirect")`). If so, you can handle them immediately or rethrow them.
+- In **catch**, use `Errr` with a clear, user-facing message, then chain `.appendTo(err)` and `.throw()`.
+  - Add `.debug({ ... })` before `.appendTo(err)` when you have useful context (e.g. `service`, `accountId`).
+- **Trusted-pipeline invariants** (rare in Services; common in Steps/Strategies): use **`Preconditions.errr().shouldBe*(…).debug({…}).test()`** — not `if (!x) throw new Error` / `Errr.newError`. Lint: `steps-pattern/enforce-if-throw-use-precondition`. That rule is **HOW**; do not confuse it with Zod ingress (`enforce-ingress-contract-validation`) or the proposed WHERE rule `no-frivolous-defensive-if`.
+- Example:
+
+```js
+try {
+  await state.accept(GetAuth);
+  await state.acceptAll([GetUserModel, GetUserSyncStats]);
+} catch (err) {
+  Errr.newError("Could not get userModel.")
+    .appendTo(err).throw();
+}
+```
+
+`GetAuth` is sequential because later Steps read it. `GetUserModel` and `GetUserSyncStats` are independent → `acceptAll`.
+
+With debug context:
+
+```js
+} catch (err) {
+  const service = state.getService();
+  Errr.newError(`Could not import ${service} accounts`)
+    .debug({ service })
+    .appendTo(err)
+    .throw();
+}
+```
+
+## Example shape
+
+```js
+import Errr from "errr";
+
+import GetAuth from "../steps/get-auth";
+import LoadProfile from "../steps/load-profile";
+import LoadSettings from "../steps/load-settings";
+import ProcessData from "../steps/process-data";
+
+class MyService {
+
+  static async doSomething(state) {
+    try {
+      await state.accept(GetAuth);
+      await state.acceptAll([LoadProfile, LoadSettings]);
+      await state.accept(ProcessData);
+    } catch (err) {
+      Errr.newError("Could not do something.")
+        .appendTo(err).throw();
+    }
+  }
+}
+
+export default MyService;
+```

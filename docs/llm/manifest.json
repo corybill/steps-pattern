@@ -1,0 +1,527 @@
+{
+  "package": "steps-pattern",
+  "version": "1.5.0",
+  "pluginId": "steps-pattern",
+  "rules": {
+    "steps-pattern/enforce-architectural-layer-access": {
+      "path": "rules/enforce-architectural-layer-access.md",
+      "lintFixes": "lint-fixes/enforce-architectural-layer-access/",
+      "tags": [
+        "layers"
+      ]
+    },
+    "steps-pattern/enforce-controller-orchestration": {
+      "path": "rules/enforce-controller-orchestration.md",
+      "lintFixes": "lint-fixes/enforce-controller-orchestration/",
+      "tags": [
+        "orchestration"
+      ]
+    },
+    "steps-pattern/enforce-maddox-before-each-middle-setup-content": {
+      "path": "rules/enforce-maddox-before-each-middle-setup-content.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-before-each-setup-order": {
+      "path": "rules/enforce-maddox-before-each-setup-order.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-boilerplate": {
+      "path": "rules/enforce-maddox-boilerplate.md",
+      "lintFixes": "lint-fixes/enforce-maddox-boilerplate/",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-controller-coverage": {
+      "path": "rules/enforce-maddox-controller-coverage.md",
+      "tags": [
+        "maddox",
+        "orchestration",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-coverage": {
+      "path": "rules/enforce-maddox-coverage.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-it-setup-override-order": {
+      "path": "rules/enforce-maddox-it-setup-override-order.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-loader-action-separation": {
+      "path": "rules/enforce-maddox-loader-action-separation.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-api-contract-testing": {
+      "path": "rules/enforce-api-contract-testing.md",
+      "tags": [
+        "maddox",
+        "lint",
+        "remix"
+      ]
+    },
+    "steps-pattern/enforce-maddox-middle-setup-cardinality": {
+      "path": "rules/enforce-maddox-middle-setup-cardinality.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-module-coverage": {
+      "path": "rules/enforce-maddox-module-coverage.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-module-describe-structure": {
+      "path": "rules/enforce-maddox-module-describe-structure.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-scenario-chain-one-line": {
+      "path": "rules/enforce-maddox-scenario-chain-one-line.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-scenario-order": {
+      "path": "rules/enforce-maddox-scenario-order.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-scenario-mock-surface": {
+      "path": "rules/enforce-maddox-scenario-mock-surface.md",
+      "lintFixes": "lint-fixes/enforce-maddox-scenario-mock-surface/",
+      "tags": [
+        "maddox",
+        "mock-surface",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-maddox-setup-params-array": {
+      "path": "rules/enforce-maddox-setup-params-array.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-forbidden-words": {
+      "path": "rules/enforce-no-forbidden-words.md",
+      "lintFixes": "lint-fixes/enforce-no-forbidden-words/",
+      "tags": [
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-process-env-except-global": {
+      "path": "rules/enforce-no-process-env-except-global.md",
+      "tags": [
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-maddox-ignore-param": {
+      "path": "rules/enforce-no-maddox-ignore-param.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-maddox-should-be-called-with-subset": {
+      "path": "rules/enforce-no-maddox-should-be-called-with-subset.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-step-mock-in-maddox-test": {
+      "path": "rules/enforce-no-step-mock-in-maddox-test.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-vitest-mock-in-from-promise-spec": {
+      "path": "rules/enforce-no-vitest-mock-in-from-promise-spec.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-service-mock-in-route-controller-spec": {
+      "path": "rules/enforce-no-service-mock-in-route-controller-spec.md",
+      "tags": [
+        "orchestration",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-unused-steps": {
+      "path": "rules/enforce-no-unused-steps.md",
+      "lintFixes": "lint-fixes/enforce-no-unused-steps/",
+      "tags": [
+        "layers"
+      ]
+    },
+    "steps-pattern/enforce-proxy-structure": {
+      "path": "rules/enforce-proxy-structure.md",
+      "tags": [
+        "layers"
+      ]
+    },
+    "steps-pattern/enforce-repository-model-mapping": {
+      "path": "rules/enforce-repository-model-mapping.md",
+      "tags": [
+        "layers"
+      ]
+    },
+    "steps-pattern/enforce-route-catch-errr": {
+      "path": "rules/enforce-route-catch-errr.md",
+      "tags": [
+        "orchestration"
+      ]
+    },
+    "steps-pattern/enforce-service-orchestration": {
+      "path": "rules/enforce-service-orchestration.md",
+      "lintFixes": "lint-fixes/enforce-service-orchestration/",
+      "tags": [
+        "orchestration"
+      ]
+    },
+    "steps-pattern/enforce-step-iterator-simplicity": {
+      "path": "rules/enforce-step-iterator-simplicity.md",
+      "lintFixes": "lint-fixes/enforce-step-iterator-simplicity/",
+      "tags": [
+        "layers"
+      ]
+    },
+    "steps-pattern/enforce-step-max-file-lines": {
+      "path": "rules/enforce-step-max-file-lines.md",
+      "lintFixes": "lint-fixes/enforce-step-max-file-lines/",
+      "tags": [
+        "layers"
+      ]
+    },
+    "steps-pattern/enforce-no-step-loop-internal-function": {
+      "path": "rules/enforce-no-step-loop-internal-function.md",
+      "lintFixes": "lint-fixes/enforce-no-step-loop-internal-function/",
+      "tags": [
+        "layers"
+      ]
+    },
+    "steps-pattern/enforce-module-min-steps": {
+      "path": "rules/enforce-module-min-steps.md",
+      "lintFixes": "lint-fixes/enforce-module-min-steps/",
+      "tags": [
+        "layers",
+        "orchestration"
+      ]
+    },
+    "steps-pattern/enforce-no-repo-writes-in-loops": {
+      "path": "rules/enforce-no-repo-writes-in-loops.md",
+      "tags": [
+        "layers",
+        "repositories"
+      ]
+    },
+    "steps-pattern/enforce-injectable-bounded-fanout": {
+      "path": "rules/enforce-injectable-bounded-fanout.md",
+      "tags": [
+        "layers",
+        "proxies",
+        "maddox"
+      ]
+    },
+    "steps-pattern/enforce-step-structure": {
+      "path": "rules/enforce-step-structure.md",
+      "tags": [
+        "layers"
+      ]
+    },
+    "steps-pattern/enforce-ui-route-spec-singleton": {
+      "path": "rules/enforce-ui-route-spec-singleton.md",
+      "tags": [
+        "maddox",
+        "spec"
+      ]
+    },
+    "steps-pattern/enforce-remix-scenario-for-ui-route-tests": {
+      "path": "rules/enforce-remix-scenario-for-ui-route-tests.md",
+      "tags": [
+        "maddox",
+        "spec"
+      ]
+    },
+    "steps-pattern/enforce-jsx-spec-for-ui-routes": {
+      "path": "rules/enforce-jsx-spec-for-ui-routes.md",
+      "tags": [
+        "maddox",
+        "spec"
+      ]
+    },
+    "steps-pattern/enforce-no-from-promise-in-ui-spec": {
+      "path": "rules/enforce-no-from-promise-in-ui-spec.md",
+      "tags": [
+        "maddox",
+        "spec"
+      ]
+    },
+    "steps-pattern/enforce-maddox-describe-structure": {
+      "path": "rules/enforce-maddox-describe-structure.md",
+      "tags": [
+        "maddox",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-state-getter-setter-structure": {
+      "path": "rules/enforce-state-getter-setter-structure.md",
+      "tags": [
+        "layers",
+        "state"
+      ]
+    },
+    "steps-pattern/enforce-no-service-entry-point-in-maddox-spec": {
+      "path": "rules/enforce-no-service-entry-point-in-maddox-spec.md",
+      "tags": [
+        "maddox",
+        "orchestration",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-logger-static-message": {
+      "path": "rules/enforce-logger-static-message.md",
+      "lintFixes": "lint-fixes/enforce-logger-static-message/",
+      "tags": [
+        "layers",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-error-log-at-ingress": {
+      "path": "rules/enforce-error-log-at-ingress.md",
+      "lintFixes": "lint-fixes/enforce-error-log-at-ingress/",
+      "tags": [
+        "layers",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-empty-catch": {
+      "path": "rules/enforce-no-empty-catch.md",
+      "lintFixes": "lint-fixes/enforce-no-empty-catch/",
+      "tags": [
+        "layers",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-service-from-step": {
+      "path": "rules/enforce-no-service-from-step.md",
+      "lintFixes": "lint-fixes/enforce-no-service-from-step/",
+      "tags": [
+        "layers",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-module-accept-not-step-next": {
+      "path": "rules/enforce-module-accept-not-step-next.md",
+      "lintFixes": "lint-fixes/enforce-module-accept-not-step-next/",
+      "tags": [
+        "layers",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-errr-append-to": {
+      "path": "rules/enforce-errr-append-to.md",
+      "lintFixes": "lint-fixes/enforce-errr-append-to/",
+      "tags": [
+        "layers",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-browser-api-outside-proxy": {
+      "path": "rules/enforce-no-browser-api-outside-proxy.md",
+      "lintFixes": "lint-fixes/enforce-no-browser-api-outside-proxy/",
+      "tags": [
+        "layers",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-no-route-options-preflight": {
+      "path": "rules/enforce-no-route-options-preflight.md",
+      "lintFixes": "lint-fixes/enforce-no-route-options-preflight/",
+      "tags": [
+        "layers",
+        "lint",
+        "route"
+      ]
+    },
+    "steps-pattern/enforce-no-route-auth-check": {
+      "path": "rules/enforce-no-route-auth-check.md",
+      "lintFixes": "lint-fixes/enforce-no-route-auth-check/",
+      "tags": [
+        "layers",
+        "lint",
+        "route"
+      ]
+    },
+    "steps-pattern/enforce-controller-route-by-verb-or-path": {
+      "path": "rules/enforce-controller-route-by-verb-or-path.md",
+      "lintFixes": "lint-fixes/enforce-controller-route-by-verb-or-path/",
+      "tags": [
+        "layers",
+        "lint",
+        "route",
+        "controller"
+      ]
+    },
+    "steps-pattern/enforce-if-throw-use-precondition": {
+      "path": "rules/enforce-if-throw-use-precondition.md",
+      "lintFixes": "lint-fixes/enforce-if-throw-use-precondition/",
+      "tags": [
+        "layers",
+        "lint",
+        "step",
+        "strategy",
+        "service",
+        "module"
+      ]
+    },
+    "steps-pattern/enforce-no-maddox-compare-outside-scenario": {
+      "path": "rules/enforce-no-maddox-compare-outside-scenario.md",
+      "lintFixes": "lint-fixes/enforce-no-maddox-compare-outside-scenario/",
+      "tags": [
+        "layers",
+        "lint",
+        "maddox",
+        "spec"
+      ]
+    },
+    "steps-pattern/enforce-outbound-class-method-call": {
+      "path": "rules/enforce-outbound-class-method-call.md",
+      "lintFixes": "lint-fixes/enforce-outbound-class-method-call/",
+      "tags": [
+        "layers",
+        "lint"
+      ]
+    },
+    "steps-pattern/enforce-ingress-contract-validation": {
+      "path": "rules/enforce-ingress-contract-validation.md",
+      "lintFixes": "lint-fixes/enforce-ingress-contract-validation/",
+      "tags": [
+        "layers",
+        "lint",
+        "controller"
+      ]
+    },
+    "steps-pattern/enforce-maddox-validation-coverage": {
+      "path": "rules/enforce-maddox-validation-coverage.md",
+      "lintFixes": "lint-fixes/enforce-maddox-validation-coverage/",
+      "tags": [
+        "maddox",
+        "lint",
+        "validation"
+      ]
+    }
+  },
+  "topics": {
+    "steps-pattern-overview": {
+      "path": "framework/steps-pattern-overview.md",
+      "tags": [
+        "framework",
+        "layers"
+      ]
+    },
+    "layers-services-modules-steps": {
+      "path": "framework/layers-services-modules-steps.md",
+      "tags": [
+        "framework",
+        "layers"
+      ]
+    },
+    "gang-of-four": {
+      "path": "framework/gang-of-four.md",
+      "tags": [
+        "framework",
+        "layers",
+        "lint"
+      ]
+    },
+    "routing-dispatch-choice": {
+      "path": "framework/routing-dispatch-choice.md",
+      "tags": [
+        "framework",
+        "layers",
+        "route",
+        "controller",
+        "service",
+        "module",
+        "strategy"
+      ]
+    },
+    "maddox-scenarios": {
+      "path": "framework/maddox-scenarios.md",
+      "tags": [
+        "framework",
+        "maddox",
+        "spec"
+      ]
+    },
+    "maddox-module-specs": {
+      "path": "framework/maddox-module-specs.md",
+      "tags": [
+        "framework",
+        "maddox",
+        "module"
+      ]
+    },
+    "maddox-before-each": {
+      "path": "framework/maddox-before-each.md",
+      "tags": [
+        "framework",
+        "maddox",
+        "spec"
+      ]
+    },
+    "anti-patterns": {
+      "path": "framework/anti-patterns.md",
+      "tags": [
+        "framework",
+        "lint",
+        "agents"
+      ]
+    },
+    "lint-fixes": {
+      "path": "lint-fixes/README.md",
+      "tags": [
+        "framework",
+        "lint",
+        "agents"
+      ]
+    },
+    "rule-candidates": {
+      "path": "framework/rule-candidates.md",
+      "tags": [
+        "lint",
+        "agents",
+        "review"
+      ]
+    }
+  }
+}

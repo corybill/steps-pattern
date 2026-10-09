@@ -1,0 +1,83 @@
+---
+description: How backend domain models should be structured and composed
+globs:
+  - "**/src/models/**/*.js"
+alwaysApply: false
+---
+
+# Backend Domain Models
+
+## Goal for this rule
+
+This rule defines the Domain Model type in the backend. Domain models are the core representations of business objects (e.g., `User`, `Account`, `BillingTransaction`). They compose raw database entities into a tree-like shape, keeping state files clean and mapping singular across all levels of the system (including the UI).
+
+---
+
+## 1. File and Class Structure
+
+-   **One model per file.**
+-   **File Name:** kebab-case, e.g., `account.js`.
+-   **Class Name:** PascalCase, matching the file name, e.g., `Account`.
+-   **Location:** Models live in `models/src/models/`.
+
+---
+
+## 2. Model Responsibilities
+
+Domain Models are responsible for **aggregating, composing, and flattening database entities**. They represent the "truth" of a business object.
+
+-   **Composition:** A model composes multiple database tables/entities (e.g., a `Account` model composes the `Accounts` entity, `Memberships` entity, and `AccountUsers` entity).
+-   **Singular Mapping:** The model returns a flattened, aggregate response (root + children) that maps directly to UI properties. This keeps state files small and prevents different layers of the system from representing the same object in multiple ways.
+-   **No Direct Database/Prisma Access:** Models must **never** call `PostgresProxy` or Prisma directly. They must call Entity classes to query the database.
+-   **No Business Logic:** Models contain data composition and formatting logic, but **never** business logic. Business logic belongs in Steps.
+
+---
+
+## 3. Example Shape
+
+```javascript
+import Errr from "errr";
+
+import Accounts from "../entities/accounts.js";
+import Memberships from "../entities/partner-members.js";
+
+class Account {
+  
+  static async getByAccountId(accountId) {
+    try {
+      // 1. Call Entities to query the database (no PostgresProxy or Prisma here)
+      const accountRow = await Accounts.get(accountId);
+      const memberRows = await Memberships.getByAccountId(accountId);
+      
+      if (!accountRow) return null;
+      
+      // 2. Compose and return a flattened, aggregated domain shape
+      return {
+        ...accountRow,
+        members: memberRows.reduce((acc, member) => {
+          acc[member.memberSlotId] = member;
+          return acc;
+        }, {})
+      };
+      
+    } catch (err) {
+      Errr.newError("Could not get Account domain model")
+        .debug({ accountId })
+        .appendTo(err)
+        .throw();
+    }
+  }
+}
+
+export default Account;
+```
+
+---
+
+## 4. Verification & Testing (Maddox Model Scenario)
+
+-   **Maddox Model Specs:** Model specs live in `spec/api/models/**/*.spec.js`.
+-   **What to Mock:** Mock **only the entities** the model uses (e.g., `Accounts`, `Memberships`).
+-   **No Proxies:** Never mock `PostgresProxy` or Prisma in a model spec—mock entities instead.
+-   **Mock Registration:** Register `.mockThisFunction(label, method, entityModuleRef)` for each entity method in first-call order.
+-   **Assertion Priority:** Use `shouldBeCalledWith` to deeply assert that the model passes the correct parameters to the entities.

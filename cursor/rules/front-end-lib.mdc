@@ -1,0 +1,65 @@
+---
+description: How front-end utilities, custom hooks, and styles (Lib) should be structured
+globs:
+  - "**/app/front-end/lib/**/*.{js,jsx,ts,tsx}"
+alwaysApply: false
+---
+
+# Front-End Lib (Utilities, Hooks, and Styles)
+
+## Goal for this rule
+
+This rule defines the Lib component type in the front-end. The Lib directory (`@/front-end/lib/`) is reserved for shared environment logic, custom React hooks, and global styling configurations.
+
+---
+
+## 1. Lib Directory Structure & Responsibilities
+
+The Lib directory is organized into strict, single-concern subdirectories:
+
+1.  **Hooks (`@/front-end/lib/hooks/`):**
+    *   Contains custom, reusable React hooks (e.g., `use-mobile.js`, `use-log-event.js`).
+    *   Hooks must be pure UI lifecycle or interaction helpers. They must **never** contain hardcoded domain logic or direct database queries.
+2.  **Styles (`@/front-end/lib/styles/`):**
+    *   Contains global CSS, Tailwind configurations, or theme variables.
+    *   `cn` (clsx + tailwind-merge) lives here. Do not recreate `lib/utils.js`.
+3.  **No helper / util / utils paths:**
+    *   Files or directories named `helper`, `helpers`, `util`, or `utils` are forbidden. Do not rename to a synonym.
+    *   Domain compute belongs in a backend Step. Labels belong in a named `common/` or `constants/` file. Same tiny function on a Step and a hook: duplicate it.
+    *   How to fix: `steps-pattern/docs/llm/lint-fixes/enforce-no-forbidden-words/`.
+
+---
+
+## 2. Example Shape (Custom Hook)
+
+```javascript
+import { useEffect, useState } from "react";
+
+export function useWindowSize() {
+  const [windowSize, setWindowSize] = useState({
+    width: typeof window !== "undefined" ? window.innerWidth : 1200,
+    height: typeof window !== "undefined" ? window.innerHeight : 800,
+  });
+
+  useEffect(() => {
+    function handleResize() {
+      setWindowSize({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+    }
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  return windowSize;
+}
+```
+
+---
+
+## 3. Verification & Testing
+
+-   **Hook Specs:** Custom hooks are tested under `spec/app/front-end/lib/hooks/` using `@testing-library/react-hooks` or standard React Testing Library hook rendering utilities.
+-   **No Domain Logic:** Verify that the hook does not import or depend on domain-specific modules, backend steps, or repositories.

@@ -1,0 +1,53 @@
+---
+description: How generic, domain-unaware UI building blocks (Primitives) should be structured
+globs:
+  - "**/app/front-end/primitives/**/*.{jsx,tsx}"
+alwaysApply: false
+---
+
+# Front-End Primitives
+
+## Goal for this rule
+
+This rule defines the Primitive component type in the front-end. Primitives are generic, domain-unaware UI building blocks (e.g., `Button`, `Input`, `Card`, `Sheet`). They are the "atoms" of the design system.
+
+---
+
+## 1. Primitive Responsibilities
+
+-   **Domain Agnostic:** Primitives must **never** understand business logic, domain models, or specific data shapes (e.g., no references to `accountId`, `userId`, `memberId`, etc.).
+-   **No Data Fetching:** Primitives must never fetch data, use Remix loaders/actions, or call proxies.
+-   **Highly Reusable:** They should accept all styling, content, and event handlers via standard props (e.g., `children`, `className`, `onClick`, `onChange`).
+-   **Styling:** Use Tailwind CSS classes. Support custom class overrides by merging classes safely (e.g., using `clsx` or `tailwind-merge` if installed).
+
+---
+
+## 2. Example Shape
+
+```jsx
+import React from "react";
+import { cn } from "@/front-end/lib/styles";
+
+export const Card = React.forwardRef(({ className, children, ...props }, ref) => (
+  <div
+    ref={ref}
+    className={cn(
+      "rounded-xl border border-slate-200 bg-white text-slate-950 shadow-sm dark:border-slate-800 dark:bg-slate-950 dark:text-slate-50",
+      className
+    )}
+    {...props}
+  >
+    {children}
+  </div>
+));
+
+Card.displayName = "Card";
+```
+
+---
+
+## 3. Verification & Testing
+
+-   **Component Specs:** Tested under `spec/app/front-end/primitives/` using React Testing Library.
+-   **RTL Assertions:** Verify that the component renders its children, handles click events, and applies custom class names correctly.
+-   **No Mocks Needed:** Because primitives have no external dependencies, database access, or domain logic, they should **never** require Maddox mocks.

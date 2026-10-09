@@ -1,0 +1,45 @@
+---
+description: High-level overview of the Steps pattern (state + steps flow)
+globs:
+  - "**/*.{js,ts,jsx,tsx}"
+  - "**/*.{js,jsx}"
+alwaysApply: false
+---
+
+# Steps pattern (overview)
+
+## Goal for this rule
+
+This rule is defined so code can be written **exactly** as intended, with no feedback. When you receive feedback from the user, treat it as a signal to **update this rule** (and any related rules) so that next time you know precisely how they want things—no guesswork, no back-and-forth.
+
+## Flow
+
+1. **Route** (loader/action): Creates a state object, calls **one service method**, and returns a response built **only from state** (or redirect). No business logic; no direct model/entity/proxy/module calls in the route. Enforced by `enforce-controller-orchestration` (exactly one Service call; no `if` in the try body).
+2. **Service / module**: Orchestrates **steps** via `state.accept(Step)` or `state.acceptAll([...])`. **`acceptAll` is `Promise.all` — ALWAYS race Steps that can run together.** Sequential `accept` only when a later Step reads an earlier write. No business logic; **flat try body** (`enforce-service-orchestration`: no `if` / `else` / loops). Branch via ingress method selection, a Call Step, a Dispatch Step → Module method, or a Strategy. Never `isDone` / `setDone`. Independent Module items: `Promise.all` + `Module.method` (serial `for-await` only for shared mutation / rate-limit).
+3. **Steps**: Contain all business logic. A step receives `state`, reads from it, calls out through **proxies** (for external APIs/auth), **entities** (for all database operations), or **models** (for complex composed data), and **writes only to state** (a step never returns a value). Steps are run by services or modules. **Steps never call `PostgresProxy` or `Prisma` directly; they must use Entities/Repositories (`enforce-architectural-layer-access`). Steps must NEVER use `state.setDone(true)` or `state.isDone()` to control flow.**
+4. **State**: Holds all data for the flow. Rarely any logic; never business logic. Usually basic getters and setters (and can hold maps). Data is added to state only when needed for the response or another step. **State classes must NEVER hold error state or execution status flags like `isDone`.**
+5. **Proxy / entity / model**: Outbound calls (HTTP, auth) go through **proxies**. **Entities** map to tables and are the **only** layer that uses `PostgresProxy` to talk to the database; **models** compose entities into a tree-like shape. Steps (and only steps, not services) call proxies, entities, and models. Modules reuse top-level proxies/entities/models; they do not create new ones.
+6. **No Utils/Helpers**: Do not create files or directories named `helper`, `helpers`, `util`, or `utils`. Do not rename to a synonym. A helper is what you extract when you have not named a **Gang of Four** pattern (`docs/llm/framework/gang-of-four.md`). Name the pattern first (Command → Step, Strategy → `strategies/`, Template Method → accept chain, Iterator + Composite → Module per item). How to fix: `steps-pattern/docs/llm/lint-fixes/enforce-no-forbidden-words/`.
+
+## Layers (summary)
+
+| Layer | Responsibility |
+|-------|----------------|
+| **Route** | Create state, call **one** service method, return from state. |
+| **Service / module** | Flat `accept` / `acceptAll` chain; no business logic. |
+| **Step** | Business logic; read/write state; call proxy/entity/model (database access only via entity). |
+| **State** | Data bag; getters/setters only. |
+| **Proxy** | Outbound (HTTP, auth). |
+| **Entity** | One table; uses `PostgresProxy` (only place Prisma is exposed). |
+| **Model** | Tree of entities; flattened response (root + children). |
+
+## Validation ownership
+
+| Tool | Owns | Contract |
+| :--- | :--- | :--- |
+| **Zod + `Validator.validate`** | Untrusted structured payload at a **boundary**: Controllers (ingress), Module method ingress, Parse* body Steps, Catalog / MCP tool args | Throw `"Validation Error"` (`enforce-ingress-contract-validation`) |
+| **`Preconditions.errr().shouldBe*(…).debug({…}).test()`** | Trusted-pipeline **invariants** in Steps / Strategies / Services / Modules | Named domain message + SRE debug (`enforce-if-throw-use-precondition` — no `if (!x) throw`) |
+
+Never: Validator/Zod for mid-flow required-value; Preconditions for Controller/Module ingress; `eslint-disable` to silence these. Do not re-validate the same ingress fields in Steps.
+
+For details, see the rules for **routes**, **backend-services**, **backend-steps**, **backend-state**, **backend-modules**, **backend-entities**, **backend-models**, and **backend-proxies**.

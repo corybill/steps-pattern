@@ -1,0 +1,727 @@
+---
+description: Maddox Scenario tests for module (step) specs — proxies and entities, module runs real
+globs:
+  - "**/spec/api/modules/**/*.spec.js"
+  - "**/app/server/modules/**/*.spec.js"
+  - "**/spec/modules/**/*.spec.js"
+alwaysApply: false
+---
+
+# Maddox Scenario tests — **modules**
+
+Shared structure, setup rules, ordering, `Promise.all`, swallowed errors, and assertions: [**maddox-scenario-tests.mdc**](maddox-scenario-tests.mdc).
+
+## What to mock
+
+- Mock every outbound **Proxy**, **Repository/entity**, and **Module** call that the module flow reaches, in runtime order. When the module under test invokes a step and that step calls a proxy, repository, or module, trace through the step and mock that boundary rather than letting it run for real.
+- Mock sibling-module calls even when they are reached through a Call Step (`state.accept(...)`). A **Step** (or batch Step loop) may call another module; that downstream module is an integration boundary and should be mocked with `mockThisFunction`. Do **not** put `await OtherModule.foo(state)` in the module try body — `enforce-service-orchestration` forbids it.
+- Do **not** mock the specific entry-point method under test — exercise its real `run…`, `sync…`, `get…`, or equivalent method. Same-module reuse is a Call Step → another public method (that method has its own `.withEntryPoint` suite). Do not mock sibling methods of the class under test as a way to hide `Module.otherMethod` inside the try body.
+- For agent-tools flows, mock **`Search`** (and any other entities the steps use) on the methods that flow invokes.
+- **Database:** always mock **Entity** classes for DB operations, not `PostgresProxy` / Prisma.
+
+## File and describe structure
+
+- **One test file per module surface, or one file per method (split style).** Either is allowed:
+  - `spec/.../<module>.spec.{js,ts}` covers every exported method of `<module>`.
+  - `spec/.../<module>.<methodName>.spec.{js,ts}` siblings (one per method) collectively cover every exported method. The Maddox coverage rule resolves both shapes by scanning `<module>.spec.*` and any `<module>.<…>.spec.*` siblings in the same directory.
+- **Module entry-point coverage (enforced):** Every public static method on an exported module class **must** have its own Maddox suite with `.withEntryPoint(<ModuleClass>, "<methodName>")`. ESLint (`steps-pattern/enforce-maddox-module-coverage`) walks the module source, enumerates each public static method on the exported class(es), and confirms that the combined spec content for that module contains a matching `.withEntryPoint(..., "<methodName>")` chain. Adding a method to the module without a corresponding split-file `.withEntryPoint` suite is a lint error, exactly mirroring controller coverage. This rule does **not** apply to services — a Service is never a Maddox entry point.
+- **Describe nesting (required):** Always **two** levels of `describe`. Outer: `"Given the [module-name] module, when"` (or `… with private data, when`). Inner: `"calling [runMethod] (generated), it"` (compiler) and/or `"calling [runMethod] (AI-driven), it"` (remainder). Bare `"calling [runMethod], it"` remains legal. Do not add a third wrap describe.
+- **Outer `describe`:** Must **not** contain `beforeEach`, `afterEach`, `beforeAll`, or `afterAll`, and must **not** contain `it` / `test` directly — only nested `describe` blocks (and non-test helpers like comments). Shared fixture work belongs in a **file-scope helper** (e.g. `async function create…Context()`) that each inner suite’s `beforeEach` calls, or duplicated per inner suite if small.
+- **Inner `describe`:** Every inner suite **must** define its own `beforeEach` where you reset `context = {}`, attach `context.setup…` functions, and run any async fixture loading needed for that block. Tests and hooks live only here. If a file imports Maddox for one suite but another inner suite is plain `expect` tests only, use a no-op `beforeEach(() => {})` in that inner block so the structure stays consistent.
+- ESLint enforces this for `spec/**/modules/**/*.spec.js` via `steps-pattern/enforce-maddox-module-describe-structure`.
+- **`setupInputParams`:** typically `context.inputParams = [context.stepInput]` — one apply argument — unless the module API differs.
+
+## Scenario chain (modules)
+
+- `.mockThisFunction(…)` for each **proxy**, **repository/entity**, and **module** method the module flow calls, in execution order.
+- `.withEntryPoint is the **module** under test and the method being exercised (`runSequential`, etc.).
+- Follow [maddox-scenario-tests.mdc](maddox-scenario-tests.mdc#scenario-chain): always `.shouldBeCalledWith` with a full `context.*Params` array. NEVER `shouldBeCalledWithSubset` or `IgnoreParam`.
+
+## Worked example
+
+Illustrative **Maddox chain** for a module suite — copy into a real spec and replace stubs. This block is documentation only. Production module methods must still satisfy `enforce-service-orchestration` (flat `try` of `accept` / `acceptAll`; no `Promise.all` / `if` in the module method — put those in a Step).
+
+```js
+import Maddox from "maddox";
+import { describe, it, beforeEach } from "vitest";
+
+import Mock from "../../mocks/mock";
+
+/**
+ * Worked example — **module** specs (illustrative; copy into `spec/api/modules/**/*.spec.js`).
+ * Pair with the markdown sections above and `maddox-scenario-tests.mdc`.
+ *
+ * When a **service** gets too large or you express a loop as explicit steps, a step often calls into a
+ * small **module**. Flow-phase methods take the caller’s **`state`**. Iterated APIs take a plain
+ * **`stepInput` object** `{ … }` — not a Remix `Request`. Keep outbound deps to **models**,
+ * **proxies**, **entities**, and sibling **modules** reached through a Step (mock those modules).
+ *
+ * This shape mirrors the **route** worked example in `maddox-route-scenario-tests.mdc`: same `describe` / `beforeEach` helpers, `Scenario`
+ * chain, and mock ordering. Differences: entry point is **`ExampleModule.run…(stepInput)`**,
+ * **`setupInputParams`** builds **`context.inputParams = [context.stepInput]`** (one apply argument), and
+ * there is **no sibling-module mock** (the route example’s `SomeModule` is omitted on purpose).
+ *
+ * - `describe` / `it`: Name the module and behavior in plain language (Given… when… / should…).
+ * - `beforeEach`: Same `context` reset + `context.setup…` function attachments as the route example.
+ * - **Context:** Same rules as the route example (no stray `context` mutations; override `context.setup…`
+ *   in an `it` when you need a branch-specific fixture).
+ * - Setup order: `setupValues` → `setupInputParams` (`stepInput` + `inputParams`) → one setup per outbound
+ *   call (first-use order) → `setupResponse`.
+ * - Maddox `Scenario` chain: `mockThisFunction` → `withEntryPoint(ExampleModule, "runSequential" | …)` →
+ *   `withInputParams` → `shouldBeCalledWith` / `doesReturnWithPromise` / `doesErrorWithPromise` → `.test`.
+ * - With `Promise.all`, assert **both** branches (`shouldBeCalledWith` for each) even when one rejects.
+ */
+
+
+/** Example-only mock builder; swap for shared `spec/mocks/…` in real suites. */
+class RowMockBuilder {
+  constructor(o = {}) { this.record = {...o}; }
+  get() { return this.record; }
+}
+
+/**
+ * Stand-in dependencies for Maddox (replace with real `@/server/models/…`, `@/server/proxies/…`, etc.).
+ * Methods must exist for `mockThisFunction`.
+ */
+const SomeModel = { get() {} };
+const HttpProxy = { post() {} };
+const SomeEntity = { save() {} };
+
+/**
+ * Example module: replace with a real `@/server/…` module your service calls for one orchestration step.
+ * Inlined so the file documents call order; **`stepInput`** is the single argument from the parent service.
+ */
+class ExampleModule {
+  static recordIdFromInput(stepInput) {}
+
+  /** Sequential flow (no `Promise.all` between outbound calls). */
+  static async runSequential(stepInput) {}
+
+  /** After `SomeModel.get`, two `HttpProxy.post` calls run inside `Promise.all` (no cross-module calls). */
+  static async runWithPromiseAll(stepInput) {}
+}
+
+const Scenario = Maddox.scenarios.FromPromiseScenario;
+
+describe("Given the [ModuleName] module, when", function () {
+
+  describe("calling runSequential [stepName] (no Promise.all), it", function () {
+    let context;
+
+    beforeEach(() => {
+      // Only the context reset (`context = {}`) and attaching `context.setup…` functions belong here.
+      // We never run fixture logic in `beforeEach` outside of those function declarations (except the reset).
+      context = {};
+
+      context.setupValues = () => {
+        context.row = new RowMockBuilder().get();
+      };
+
+      context.setupInputParams = () => {
+        // Maddox uses `fn.apply(entryPoint, inputParams)` — one element ⇒ one module argument: plain object.
+        context.stepInput = {
+          recordId: context.row.id,
+          params: { id: context.row.id, source: "parent-service-orchestration" },
+        };
+        context.inputParams = [context.stepInput];
+      };
+
+      context.setupGetSomeModel = () => {
+        context.modelGetParams = [context.row.id];
+        context.modelGetResponse = structuredClone(context.row);
+        context.modelGetError = new Error(`SomeModel.get: ${Mock.getHash()}`);
+      };
+
+      /** First HttpProxy.post — persist draft to external Foo service (literal names per outbound call). */
+      context.setupFooServiceSaveDraftPost = () => {
+        context.fooServiceSaveDraftPostParams = [
+          context.modelGetResponse.fooIngestUrl,
+          {
+            draft: context.modelGetResponse.payload,
+            ...(context.modelGetResponse.fooPostExtensions ?? {}),
+          },
+        ];
+        context.fooServiceSaveDraftPostResponse = { status: 201, body: { saved: true } };
+        context.fooServiceSaveDraftPostError = new Error(
+          `HttpProxy.post (Foo save draft): ${Mock.getHash()}`
+        );
+      };
+
+      /** Second HttpProxy.post — notify external Bar service after Foo draft (same mock, second invocation). */
+      context.setupBarServiceNotifyPost = () => {
+        context.barServiceNotifyPostParams = [
+          context.modelGetResponse.barNotifyUrl,
+          { recordId: context.modelGetResponse.id, phase: "post-processing" },
+        ];
+        context.barServiceNotifyPostResponse = { status: 202, body: { accepted: true } };
+        context.barServiceNotifyPostError = new Error(
+          `HttpProxy.post (Bar notify): ${Mock.getHash()}`
+        );
+      };
+
+      context.setupSaveSomeEntity = () => {
+        context.entitySaveParams = [context.modelGetResponse];
+        context.entitySaveResponse = structuredClone(context.modelGetResponse);
+        context.entitySaveError = new Error(`SomeEntity.save: ${Mock.getHash()}`);
+      };
+
+      context.setupResponse = () => {
+        context.expectedResponse = { data: structuredClone(context.row) };
+      };
+    });
+
+    it("should complete the flow and return payload.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupFooServiceSaveDraftPost();
+      context.setupBarServiceNotifyPost();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        /**
+         * Block order (blank line between groups):
+         *
+         * mockThisFunction — one per unique (label, method), first-use order.
+         *
+         * withEntryPoint / withInputParams
+         *
+         * shouldBeCalledWith + doesReturnWithPromise — runtime call order. `HttpProxy.post` is
+         *   registered once but asserted twice (Foo draft, then Bar notify).
+         *
+         * test / catch
+         */
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runSequential")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesReturnWithPromise("SomeModel", "get", context.modelGetResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.fooServiceSaveDraftPostParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.fooServiceSaveDraftPostResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.barServiceNotifyPostParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.barServiceNotifyPostResponse)
+
+          .shouldBeCalledWith("SomeEntity", "save", context.entitySaveParams)
+          .doesReturnWithPromise("SomeEntity", "save", context.entitySaveResponse)
+
+          .test((err, response) => {
+            // Success: (1) no error, (2) response matches expected aggregate.
+            Maddox.compare.equal(err, undefined);
+            Maddox.compare.equal(response, context.expectedResponse);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+
+    // Alternate success at flow level: replace setup functions (not ad-hoc `context` fields); see
+    // **Context** in the module rule above. Mirror any branch change in the Scenario chain below.
+    it("should complete the flow without Bar notify when row skips downstream webhook (alternate success).", async function () {
+      context.setupValues = () => {
+        context.row = new RowMockBuilder({
+          skipBarNotify: true,
+          payload: { action: "no-bar-notify", tier: "internal" },
+          fooIngestUrl: "https://foo-service.example.test/save-draft-alt-path",
+          fooPostExtensions: { clientSegment: "alternate-success-example" },
+        }).get();
+      };
+
+      context.setupFooServiceSaveDraftPost = () => {
+        context.fooServiceSaveDraftPostParams = [
+          context.modelGetResponse.fooIngestUrl,
+          {
+            draft: context.modelGetResponse.payload,
+            ...(context.modelGetResponse.fooPostExtensions ?? {}),
+          },
+        ];
+        context.fooServiceSaveDraftPostResponse = { status: 200, body: { saved: true, mode: "lean" } };
+        context.fooServiceSaveDraftPostError = new Error(
+          `HttpProxy.post (Foo save draft): ${Mock.getHash()}`
+        );
+      };
+
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupFooServiceSaveDraftPost();
+      context.setupBarServiceNotifyPost();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runSequential")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesReturnWithPromise("SomeModel", "get", context.modelGetResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.fooServiceSaveDraftPostParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.fooServiceSaveDraftPostResponse)
+
+          // Rest of the setup matches the default happy path (including `setupBarServiceNotifyPost` above).
+          // `runSequential` does not call the second `HttpProxy.post` when `row.skipBarNotify` is true,
+          // so we omit `shouldBeCalledWith` / `doesReturnWithPromise` for Bar here — not a chain defect.
+
+          .shouldBeCalledWith("SomeEntity", "save", context.entitySaveParams)
+          .doesReturnWithPromise("SomeEntity", "save", context.entitySaveResponse)
+
+          .test((err, response) => {
+            // Success: (1) no error, (2) response matches expected aggregate.
+            Maddox.compare.equal(err, undefined);
+            Maddox.compare.equal(response, context.expectedResponse);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+
+    // Failure cases follow runtime order: SomeModel.get → HttpProxy.post (Foo) → HttpProxy.post (Bar) → SomeEntity.save.
+    // "should handle error from [DependencyLabel].[methodName].",
+    it("should handle error from SomeModel.get.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupFooServiceSaveDraftPost();
+      context.setupBarServiceNotifyPost();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runSequential")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesErrorWithPromise("SomeModel", "get", context.modelGetError)
+
+          .test((err, response) => {
+            // (1) `err.stack` contains expected message substring(s) (user-facing + upstream); one or more `containsError` checks.
+            Maddox.compare.containsError(err, context.modelGetError.message);
+            // (2) `err.stack` contains expected debug context from `Errr` / `.debug({ … })` (zero or more checks).
+            // (3) Failed entry point — no return payload.
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+
+    it("should handle error from HttpProxy.post when saving draft to Foo service.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupFooServiceSaveDraftPost();
+      context.setupBarServiceNotifyPost();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runSequential")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesReturnWithPromise("SomeModel", "get", context.modelGetResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.fooServiceSaveDraftPostParams)
+          .doesErrorWithPromise("HttpProxy", "post", context.fooServiceSaveDraftPostError)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, context.fooServiceSaveDraftPostError.message);
+            // (2) Debug params on stack — add `containsError` checks when `[ModuleName].run…` wraps errors with `.debug({ … })`.
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+
+    it("should handle error from HttpProxy.post when notifying Bar service.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupFooServiceSaveDraftPost();
+      context.setupBarServiceNotifyPost();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runSequential")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesReturnWithPromise("SomeModel", "get", context.modelGetResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.fooServiceSaveDraftPostParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.fooServiceSaveDraftPostResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.barServiceNotifyPostParams)
+          .doesErrorWithPromise("HttpProxy", "post", context.barServiceNotifyPostError)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, context.barServiceNotifyPostError.message);
+            // (2) Debug params on stack — add `containsError` checks when `[ModuleName].run…` wraps errors with `.debug({ … })`.
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+
+    it("should handle error from SomeEntity.save.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupFooServiceSaveDraftPost();
+      context.setupBarServiceNotifyPost();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runSequential")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesReturnWithPromise("SomeModel", "get", context.modelGetResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.fooServiceSaveDraftPostParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.fooServiceSaveDraftPostResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.barServiceNotifyPostParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.barServiceNotifyPostResponse)
+
+          .shouldBeCalledWith("SomeEntity", "save", context.entitySaveParams)
+          .doesErrorWithPromise("SomeEntity", "save", context.entitySaveError)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, context.entitySaveError.message);
+            // (2) Debug params on stack — add `containsError` checks when `[ModuleName].run…` wraps errors with `.debug({ … })`.
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+  });
+
+  describe("calling runWithPromiseAll [stepName] (with Promise.all), it", function () {
+    let context;
+
+    beforeEach(() => {
+      // Only the context reset (`context = {}`) and attaching `context.setup…` functions belong here.
+      // We never run fixture logic in `beforeEach` outside of those function declarations (except the reset).
+      context = {};
+
+      context.setupValues = () => {
+        context.row = new RowMockBuilder().get();
+      };
+
+      context.setupInputParams = () => {
+        // Maddox uses `fn.apply(entryPoint, inputParams)` — one element ⇒ one module argument: plain object.
+        context.stepInput = {
+          recordId: context.row.id,
+          params: { id: context.row.id, source: "parent-service-orchestration" },
+        };
+        context.inputParams = [context.stepInput];
+      };
+
+      context.setupGetSomeModel = () => {
+        context.modelGetParams = [context.row.id];
+        context.modelGetResponse = structuredClone(context.row);
+        context.modelGetError = new Error(`SomeModel.get: ${Mock.getHash()}`);
+      };
+
+      /** First `HttpProxy.post` inside `Promise.all` (stable assertion order: A then B). */
+      context.setupParallelHttpPostFirst = () => {
+        context.httpProxyParallelFirstParams = [
+          context.modelGetResponse.url,
+          context.modelGetResponse.payload,
+        ];
+        context.httpProxyParallelFirstResponse = { status: 200, body: { branch: "a" } };
+        context.httpProxyParallelFirstError = new Error(
+          `HttpProxy.post (parallel A): ${Mock.getHash()}`
+        );
+      };
+
+      /** Second `HttpProxy.post` inside the same `Promise.all` (same mock label, second invocation). */
+      context.setupParallelHttpPostSecond = () => {
+        context.httpProxyParallelSecondParams = [
+          context.modelGetResponse.secondaryUrl,
+          context.modelGetResponse.secondaryPayload,
+        ];
+        context.httpProxyParallelSecondResponse = { status: 200, body: { branch: "b" } };
+        context.httpProxyParallelSecondError = new Error(
+          `HttpProxy.post (parallel B): ${Mock.getHash()}`
+        );
+      };
+
+      context.setupSaveSomeEntity = () => {
+        context.entitySaveParams = [context.modelGetResponse];
+        context.entitySaveResponse = structuredClone(context.modelGetResponse);
+        context.entitySaveError = new Error(`SomeEntity.save: ${Mock.getHash()}`);
+      };
+
+      context.setupResponse = () => {
+        context.expectedResponse = { data: structuredClone(context.row) };
+      };
+    });
+
+    it("should complete the flow (two HttpProxy.post calls in Promise.all after get).", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupParallelHttpPostFirst();
+      context.setupParallelHttpPostSecond();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        /**
+         * mockThisFunction order is first-use: Model → HttpProxy → Entity. `HttpProxy.post` is registered
+         * once; assert it twice in stable order (parallel A, then parallel B), then Entity.save.
+         */
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runWithPromiseAll")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesReturnWithPromise("SomeModel", "get", context.modelGetResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.httpProxyParallelFirstParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.httpProxyParallelFirstResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.httpProxyParallelSecondParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.httpProxyParallelSecondResponse)
+
+          .shouldBeCalledWith("SomeEntity", "save", context.entitySaveParams)
+          .doesReturnWithPromise("SomeEntity", "save", context.entitySaveResponse)
+
+          .test((err, response) => {
+            // Success: (1) no error, (2) response matches expected aggregate.
+            Maddox.compare.equal(err, undefined);
+            Maddox.compare.equal(response, context.expectedResponse);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+
+    // Failure cases follow the same order as `.mockThisFunction`: SomeModel.get → HttpProxy.post → HttpProxy.post → SomeEntity.save.
+    // "should handle error from [DependencyLabel].[methodName].",
+    it("should handle error from SomeModel.get.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupParallelHttpPostFirst();
+      context.setupParallelHttpPostSecond();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runWithPromiseAll")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesErrorWithPromise("SomeModel", "get", context.modelGetError)
+
+          .test((err, response) => {
+            // (1) `err.stack` contains expected message substring(s) (user-facing + upstream); one or more `containsError` checks.
+            Maddox.compare.containsError(err, context.modelGetError.message);
+            // (2) `err.stack` contains expected debug context from `Errr` / `.debug({ … })` (zero or more checks).
+            // (3) Failed entry point — no return payload.
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+
+    it("should handle error from HttpProxy.post on parallel A (Promise.all: still expect parallel B).", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupParallelHttpPostFirst();
+      context.setupParallelHttpPostSecond();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runWithPromiseAll")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesReturnWithPromise("SomeModel", "get", context.modelGetResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.httpProxyParallelFirstParams)
+          .doesErrorWithPromise("HttpProxy", "post", context.httpProxyParallelFirstError)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.httpProxyParallelSecondParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.httpProxyParallelSecondResponse)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, context.httpProxyParallelFirstError.message);
+            // (2) Debug params on stack — add `containsError` checks when the module wraps errors with `.debug({ … })`.
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+
+    it("should handle error from HttpProxy.post on parallel B (Promise.all: still expect parallel A).", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupParallelHttpPostFirst();
+      context.setupParallelHttpPostSecond();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runWithPromiseAll")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesReturnWithPromise("SomeModel", "get", context.modelGetResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.httpProxyParallelFirstParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.httpProxyParallelFirstResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.httpProxyParallelSecondParams)
+          .doesErrorWithPromise("HttpProxy", "post", context.httpProxyParallelSecondError)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, context.httpProxyParallelSecondError.message);
+            // (2) Debug params on stack — add `containsError` checks when the module wraps errors with `.debug({ … })`.
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+
+    it("should handle error from SomeEntity.save.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetSomeModel();
+      context.setupParallelHttpPostFirst();
+      context.setupParallelHttpPostSecond();
+      context.setupSaveSomeEntity();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("SomeModel", "get", SomeModel)
+          .mockThisFunction("HttpProxy", "post", HttpProxy)
+          .mockThisFunction("SomeEntity", "save", SomeEntity)
+
+          .withEntryPoint(ExampleModule, "runWithPromiseAll")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("SomeModel", "get", context.modelGetParams)
+          .doesReturnWithPromise("SomeModel", "get", context.modelGetResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.httpProxyParallelFirstParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.httpProxyParallelFirstResponse)
+
+          .shouldBeCalledWith("HttpProxy", "post", context.httpProxyParallelSecondParams)
+          .doesReturnWithPromise("HttpProxy", "post", context.httpProxyParallelSecondResponse)
+
+          .shouldBeCalledWith("SomeEntity", "save", context.entitySaveParams)
+          .doesErrorWithPromise("SomeEntity", "save", context.entitySaveError)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, context.entitySaveError.message);
+            // (2) Debug params on stack — add `containsError` checks when `[ModuleName].run…` wraps errors with `.debug({ … })`.
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          })
+          .catch((err) => {
+            reject(err.stack);
+          });
+      });
+    });
+  });
+});

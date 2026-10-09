@@ -1,0 +1,56 @@
+---
+description: Repo layout + AWS org account boundaries. All specifics come from .agent-context.json.
+alwaysApply: true
+requires: [repo, aws, products]
+---
+
+# Repo studio (universal interface)
+
+Load `.agent-context.json` from the repo root (fall back to `.agent-context.local.json` for per-dev overrides). If neither exists, run `steps-pattern bootstrap-context` before answering architecture, deployment, or AWS questions.
+
+Rules below apply to repos where `${repo.layout}` is set. Common layouts:
+- `holding-repo-multi-product` — multiple product trees under `${repo.productsDir}/`, shared kits under `${repo.packagesDir}/`, each product owns its own lockfile and SST deploy root.
+- `single-product` — one product at the repo root; `${repo.productsDir}` and `${repo.packagesDir}` may be empty.
+- `monorepo-single-lockfile` — root-level `pnpm-workspace.yaml` or equivalent; different operational rules.
+
+## Layout
+
+- Shared kits: `${repo.packagesDir}/` (reused across products).
+- Products: enumerate `${products[]}`. Each product root is `${repo.productsDir}/${products[i].slug}/` and may own:
+  - its own lockfile (do not invent a repo-root lockfile for `holding-repo-multi-product`)
+  - its own SST deploy root and stages
+  - its own `.cursor/rules/` and `.cursor/skills/` under `${repo.productsDir}/${products[i].slug}/.cursor/`
+- Repo-level tooling (if any): `${repo.toolsDir}` (optional; omit when unset).
+- Active feature campaigns: `${repo.workDir}/<product>/<feature>/` (optional).
+
+Run product-level `pnpm` / `sst` / migration commands from inside `${repo.productsDir}/${slug}/`, never from the repo root (when the layout is `holding-repo-multi-product`).
+
+## AWS accounts
+
+Skip this section if `${aws}` is unset (not every repo deploys to AWS).
+
+- Organization: `${aws.organizationId}` managed from account `${aws.managementAccountId}`.
+- OUs: `${aws.ous.deployments}` (product prod accounts) and `${aws.ous.sandboxes}` (personal/sandbox accounts) when both exist.
+- Enumerate accounts from `${aws.accounts[]}` — each entry has `{ name, id, profile, product, stage, removalPolicy? }`.
+- Closed/suspended accounts live in `${aws.closedAccounts[]}` and MUST NOT be redeployed to.
+- Never deploy product A into product B's accounts.
+- Never reuse another product's OIDC deploy role, product-prefixed GitHub secrets (`*_DOMAIN`, `*_ROLE_ARN`), or Roles-Anywhere trust anchors.
+- Reuse the org pattern (OIDC, `remove` vs `retain`, personal-stage local Postgres); do not share account IDs or stacks.
+
+### Account summary
+
+For each `${aws.accounts[i]}`:
+- Product: `${aws.accounts[i].product}` | Stage: `${aws.accounts[i].stage}` | Account: `${aws.accounts[i].id}` | AWS profile: `${aws.accounts[i].profile}` | Removal: `${aws.accounts[i].removalPolicy}` (if set).
+
+## Domains
+
+Skip this section if `${products[*].domains}` is empty.
+
+Hosted zones live in the product's prod account, not in the registrar/management account. For each product with domains:
+- `${products[i].slug}`: domains `${products[i].domains[].apex}` with zone IDs `${products[i].domains[].zoneId}`. Any entry with `role: "redirect-to-<slug>"` is an S3 website redirect + CloudFront + ACM, not a primary site.
+
+## Guardrails
+
+- If a product's `${products[i].sstGuard}` is set, that function MUST refuse non-matching account IDs and refuse closed stages (see `${aws.closedAccounts[]}`).
+- A `.github/workflows/deploy-<slug>.yml` must assume `arn:aws:iam::<accountId>:role/<oidcRole>` scoped to `repo:<owner>/<repo>:environment:<githubEnvironment>` from `${aws.accounts[]}`.
+- Push to `main` deploys production only for products whose `${products[i].branchDeploy}` is `main`.

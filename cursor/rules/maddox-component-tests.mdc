@@ -1,0 +1,92 @@
+---
+description: Maddox BDD Scenario tests for React components
+globs:
+  - "**/spec/components/**/*.{spec.jsx,spec.js}"
+alwaysApply: false
+---
+
+# Maddox Scenario tests — **components**
+
+Shared structure, setup rules, ordering, and assertions: [**maddox-scenario-tests.mdc**](maddox-scenario-tests.mdc).
+
+## Core Principles
+
+- **Behavior-Driven Development (BDD):** Tests will describe behavior from the user's perspective (Given/When/Then).
+- **React Testing Library (RTL):** Use RTL for DOM interactions and assertions, focusing on accessibility and user-visible elements. Keep the component under test as a "black box".
+- **Maddox Integration:** For component testing, we don't necessarily use the `Scenario` chain runner (since RTL mounts the component), but we still use the Maddox `Given... when... it...` block nesting, the `context = {}` pattern, and `Maddox.compare.equal` (or `Maddox.compare.containsError` for thrown errors) for assertions. NEVER `Maddox.compare.subset`.
+- **Mocking:** Use `vitest` mocks (`vi.fn()`, etc.) for external dependencies (hooks, context, API calls).
+
+## File and describe structure
+
+- **One test file per component.** Placed in `spec/components/…` mirroring the `app/front-end/components/…` structure.
+- **Describe nesting:** Top level `"Given the [ComponentName] component, when"`. Inner describes are actions `"rendering the component, it"` or `"clicking the action button, it"`.
+
+## Context Setup
+
+- Use **one** `context = {}` object created in `beforeEach`.
+- Define context setups as top-level functions on `context` in `beforeEach`:
+    - `context.setupValues()`: Values such as test IDs, texts, child nodes.
+    - `context.setupProps()`: Component props (e.g., `context.props = { title: "..." }`).
+    - `context.setupMocks()`: Mocks for external hooks/contexts.
+- Do not mutate `context` inside tests except by reassigning `context.setup…` functions before calling them.
+- Tests execute the setups, then `render(<Component {...context.props} />)`, then assert using `Maddox.compare`.
+
+## Worked example
+
+```jsx
+import Maddox from "maddox";
+import { describe, it, beforeEach, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+
+import { MyComponent } from "@/front-end/features/my-feature/my-component";
+
+describe("Given the MyComponent component, when", function () {
+  let context;
+
+  beforeEach(() => {
+    context = {};
+
+    context.setupValues = () => {
+      context.title = "Test Title";
+    };
+
+    context.setupProps = () => {
+      context.props = {
+        title: context.title,
+        onClick: vi.fn(),
+      };
+    };
+
+    context.setupMocks = () => {
+      // e.g. mock a custom hook
+      // vi.mocked(useCustomHook).mockReturnValue({ data: "mocked" });
+    };
+  });
+
+  describe("rendering the component, it", function () {
+    it("should display the correct title.", function () {
+      context.setupValues();
+      context.setupProps();
+      context.setupMocks();
+
+      render(<MyComponent {...context.props} />);
+      
+      const heading = screen.getByText(context.title);
+      Maddox.compare.equal(heading.textContent, context.title);
+    });
+  });
+
+  describe("clicking the button, it", function () {
+    it("should call the onClick handler.", function () {
+      context.setupValues();
+      context.setupProps();
+      context.setupMocks();
+
+      render(<MyComponent {...context.props} />);
+      fireEvent.click(screen.getByRole("button"));
+      
+      Maddox.compare.equal(context.props.onClick.mock.calls.length, 1);
+    });
+  });
+});
+```

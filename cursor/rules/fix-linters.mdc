@@ -1,0 +1,26 @@
+---
+description: When fixing linter errors, stop and understand the architectural intent before making code changes.
+globs:
+  - "**/*.{js,ts,jsx,tsx}"
+  - "**/*.{js,jsx}"
+alwaysApply: false
+---
+# Fix Linters: Architectural Intent First
+
+When instructed to "fix linters" or resolve ESLint errors, DO NOT treat the errors as syntax puzzles to bypass (e.g., arbitrarily renaming methods with underscores, moving `return` statements, or suppressing rules).
+
+Instead, follow this rigorous plan to ensure you are adopting the architecture the linters enforce:
+
+0. **Record the failing shape (for `steps-pattern/*` only)**: Before editing, append a redacted fail observation via `pnpm --filter steps-pattern anti-patterns:record -- --phase fail …` (see [`packages/steps-pattern/anti-patterns/README.md`](../../../packages/steps-pattern/anti-patterns/README.md)). Keep the `observationId`. Do not write these into `@agent-dossier` / `TECH_DEBT_LOG.md`.
+1. **Understand the Intent**: Before changing any code, read the failing rule’s guide under [`packages/steps-pattern/docs/llm/rules/`](../../packages/steps-pattern/docs/llm/rules/) (see [`packages/steps-pattern/docs/llm/manifest.json`](../../packages/steps-pattern/docs/llm/manifest.json) to map `ruleId` → file) and the custom rule implementation in [`packages/steps-pattern/lib/rules/`](../../packages/steps-pattern/lib/rules/) for any failing `steps-pattern/*` rules. If the message has a **`Fixes:`** line (or the rule has `lintFixes` in the manifest), open that [`docs/llm/lint-fixes/<rule>/`](../../packages/steps-pattern/docs/llm/lint-fixes/) recipe index and pick a documented fix before inventing one. Understand the *architectural reason* the rule exists. For cross-cutting Maddox or Steps context, use [`packages/steps-pattern/docs/llm/framework/`](../../packages/steps-pattern/docs/llm/framework/) and [`HOWTO.md`](../../packages/steps-pattern/docs/llm/HOWTO.md).
+2. **Formulate a Plan**: Name the **Gang of Four** pattern for each extract (`docs/llm/framework/gang-of-four.md`) before creating a file. Then map each lint error type to that pattern (e.g., "Services must only orchestrate — Template Method — so I will extract this `if` block into a Command / Step"). Helpers/utils are not a plan. **Parallel-first:** newly split sibling Steps and Module loops must `acceptAll` / `Promise.all` unless the later unit reads the earlier write. Do not “fix” a fat Step by serializing independent phases.
+3. **Execute Structurally**: Implement the structural changes. 
+   - **Services/Modules**: Should only orchestrate steps (no complex business logic). Template Method. Ingress Zod on Module methods via `Validator.validate` (`enforce-ingress-contract-validation`); mid-flow required-value → Preconditions (`enforce-if-throw-use-precondition`).
+   - **Steps / Strategies**: One public `next` / `execute` (Command / Strategy). Required-value invariants → `Preconditions.errr().…debug({…}).test()` — not `if (!x) throw`. Do **not** move leftover logic into standalone helpers. Complex per-item sequences belong on a Module (Iterator + Composite). Interchangeable algorithms belong in `strategies/` (Strategy).
+   - **Controllers**: `Validator.validate` before Service; no Preconditions for ingress.
+   - **Proxies**: All external calls must be wrapped in `try/catch` and throw using `Errr`.
+   - **Entities**: Only entities should have direct database/Prisma access.
+4. **Verify**: Run the linter again and verify that the errors are resolved cleanly without introducing unreachable code or violating the spirit of the project's layered architecture.
+5. **Record the passing shape**: After the rule is clean, append the pass observation with the same `observationId` (`anti-patterns:record -- --phase pass …`). The pass snippet must be the same logical file region as the fail snippet.
+6. **Stop at the registry** — Do **not** add or edit `steps-pattern/specs/worlds/mutations/**`, `anti-patterns/coverage.json`, or promoted shapes while fixing product/app lints. Promotion into dual fail/pass world tests is a separate agent pass owned by **steps-engineer** (`/promote-anti-patterns`).
+7. **Record the decision** (steps-engineer): if the fix was architectural (extract a module, move a mock boundary, choose the temporary debt marker), add or reuse a recipe under [`docs/llm/lint-fixes/`](../../packages/steps-pattern/docs/llm/lint-fixes/README.md). See `~/.cursor/skills/steps-engineer/LINT_FIX_RECIPES.md`. Skip for mechanical rename / `beforeEach` reorder / missing wrap `it`.

@@ -1,0 +1,62 @@
+---
+description: How front-end external communication (Proxies) should be structured
+globs:
+  - "**/app/front-end/proxies/**/*.{js,ts}"
+alwaysApply: false
+---
+
+# Front-End Proxies
+
+## Goal for this rule
+
+This rule defines the Proxy component type in the front-end. Front-end proxies (`@/front-end/proxies/`) are responsible for all outbound communication from the browser (e.g., API requests, browser extension communication, third-party metrics, event tracking).
+
+---
+
+## 1. Front-End Proxy Responsibilities
+
+-   **Thin Wrapper:** The proxy's job is to make the outbound call (e.g., via `fetch`, `window.postMessage`, or an SDK) and normalize errors. It must **never** contain business logic or UI rendering logic.
+-   **Static Methods:** Proxies expose static methods (e.g., `EventProxy.logEvent({ eventName, payload })`).
+-   **Error Handling:** Wrap outbound calls in `try/catch` and use `Errr` or a consistent front-end error handler to normalize failures so callers get debuggable, consistent errors.
+-   **No Direct Fetch in Components:** Front-end components (Features, Domain, Shell) must **never** call `fetch` or use third-party SDKs directly to communicate with external APIs. They must delegate all outbound calls to a Front-End Proxy.
+
+---
+
+## 2. Example Shape
+
+```javascript
+import Errr from "errr";
+
+class EventProxy {
+  static async logEvent(eventName, payload = {}) {
+    try {
+      const response = await fetch("/api/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventName, payload }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (err) {
+      Errr.newError("EventProxy.logEvent failed")
+        .debug({ eventName, payload })
+        .appendTo(err)
+        .throw();
+    }
+  }
+}
+
+export default EventProxy;
+```
+
+---
+
+## 3. Verification & Testing
+
+-   **Proxy Specs:** Tested under `spec/app/front-end/proxies/` using standard mock-fetch utilities (e.g., `vi.spyOn(global, 'fetch')` or MSW).
+-   **What to Mock:** Mock the global `fetch` or the external SDK that the proxy wraps.
+-   **Error Propagation:** Verify that the proxy correctly catches network errors, wraps them with context, and rethrows them.

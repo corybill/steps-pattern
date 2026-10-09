@@ -1,0 +1,594 @@
+---
+description: Maddox Scenario tests for model specs — mocking entities, describe layout, entry points
+globs:
+  - "**/spec/api/models/**/*.spec.js"
+alwaysApply: false
+---
+
+# Maddox Scenario tests — **models**
+
+Shared structure, setup rules, ordering, `Promise.all`, swallowed errors, and assertions: [**maddox-scenario-tests.mdc**](maddox-scenario-tests.mdc).
+
+## What to mock
+
+- Mock only the **entities** the model uses (e.g. Users, Orders).
+- **No proxies** — never mock `PostgresProxy` (or other proxies) in model specs.
+
+## File and describe structure
+
+- **One test file per model.** Name matches the model (e.g. `experience-model.spec.js`).
+- **Describe nesting:** Top level `"Given the [model-name] model, when"`. Inner `"calling [method], it"` (or `"when [behavior], it"` if that reads better for the method group).
+
+## Scenario chain (models)
+
+- Register `.mockThisFunction(…)` for **each entity method** the model invokes, in first-call order.
+- `.withEntryPoint` is the **model** class (or object) and the **model method** under test.
+- Do not mock the model under test; mock its entity dependencies only.
+
+## Worked example
+
+Illustrative **model** suite — copy into a real `spec/api/models/**/*.spec.js` and replace stubs, `Mock` import path, and builders. This block is documentation only.
+
+```js
+import Maddox from "maddox";
+import { describe, it, beforeEach } from "vitest";
+import Errr from "errr";
+
+import Mock from "../../mocks/mock";
+
+/**
+ * Worked example — **model** specs (illustrative; copy into `spec/api/models/**/*.spec.js`).
+ * Pair with the markdown sections above and `maddox-scenario-tests.mdc`.
+ *
+ * Model scenario tests mock **entities** (e.g. `Entity1`, `Entity2`), not ad-hoc `MockN` names.
+ * Each `.mockThisFunction("EntityName", "methodName", entityModuleRef)` lines up with a real entity
+ * module the model imports; the label matches how you refer to that dependency in the scenario.
+ * If the same entity is invoked with **different** methods, register each `(label, method)` once in
+ *   first-use order (e.g. `Entity1.get` then later `Entity1.getAll`). Maddox treats `(label, method)` as
+ *   unique — you cannot register the same pair twice.
+ *
+ * - `describe` / `it`: Name the subject and behavior in plain language (Given… when… / should…).
+ * - `beforeEach`: Attach a shared `context` object, then define small `context.setupX` functions
+ *   instead of inlining large blocks inside each test. Each test calls the same setup helpers in
+ *   the same order so arrangement stays predictable.
+ * - Setup order inside `beforeEach` (always this sequence):
+ *     1. `setupValues` — assign **all (or nearly all)** values the scenario will read later (IDs,
+ *        rows, nested objects for mock returns, etc.). Prefer **mock builders** (`new Entity1MockBuilder().get()`,
+ *        `new Entity3MockBuilder({ athleteUserId }).get()`, …) — inline stubs below, or shared `spec/mocks/…` in real suites.
+ *     2. `setupInputParams` — arguments passed to `withInputParams` for the entry point.
+ *     3. One `setup<Action><ObjName>` per unique `.mockThisFunction(…)` (same order as first-use
+ *        registration above). Name the function after the mocked method + entity label, e.g.
+ *        `setupGetAllEntity2`. **At minimum** each helper defines three things for that mock:
+ *        (1) **input parameters** — `context.<entity><Action>Params` for `shouldBeCalledWith`,
+ *        (2) **success response** — `…Response` for `doesReturnWithPromise`,
+ *        (3) **error response** — `…Error` (`new Error(…)`) for `doesErrorWithPromise` in failure tests.
+ *     4. `setupResponse` — the full object you expect from the entry point when the run succeeds.
+ * - In each `it`, call those setup helpers in the exact same order as listed above (omit mock
+ *   setups only when the test truly never registers that mock; if mocks are registered, define
+ *   all corresponding setup helpers for clarity).
+ * - Maddox `Scenario` chain (typical layout):
+ *     1. `.mockThisFunction(label, method, moduleRef)` — list each `(label, method)` pair exactly
+ *        once, in the order those calls **first appear** in the code under test (like an ordered set:
+ *        first occurrence wins position; later calls reuse the same mock registration).
+ *     2. `.withEntryPoint(ClassOrObject, "method")` then `.withInputParams(…)`.
+ *     3. `.shouldBeCalledWith` / `.doesReturnWithPromise` / `.doesErrorWithPromise` — must follow
+ *        the **actual runtime call order** of the entry point. When each registered mock is only
+ *        invoked once in that flow, this chain matches the `.mockThisFunction` list. When the
+ *        implementation calls dependencies in a different order (e.g. parallel branches, or a
+ *        second call to the same mock later), mirror that execution order here—it may diverge from
+ *        registration order.
+ *     4. `.test((err, response) => { … })` — assert with `Maddox.compare`:
+ *        - **Success:** (1) `err` is `undefined`, (2) `response` equals the expected value (often
+ *          `context.expectedResponse`).
+ *        - **Failure:** (1) `Maddox.compare.containsError(err, …)` for each expected message
+ *          (user-facing wrap plus upstream error text), (2) `containsError` for each expected debug
+ *          fragment from `Errr` / `.debug({ … })` (omit this block when the entry point adds no
+ *          debug context), (3) `response` is `undefined`. NEVER `Maddox.compare.subset`.
+ * - Failure scenarios: add one `it` per mock that can reject, in the same order as
+ *   `.mockThisFunction`. Register the same mocks as the happy path, then chain expectations in
+ *   **runtime call order** up to the failing call: `doesReturnWithPromise` for each completed
+ *   invocation, then `doesErrorWithPromise` on the mock under test.
+ * - **`Promise.all`:** when two mocks run in parallel after an initial call, both branches are
+ *   still invoked — keep **both** `shouldBeCalledWith` lines for that parallel pair, then
+ *   `doesReturnWithPromise` / `doesErrorWithPromise` per branch (see `calling getByForeignKey` below).
+ */
+
+/**
+ *  Example-only mock builders (co-located with this spec); swap for shared `spec/mocks/…` in real suites. 
+ *  These are intentialy not implemented in this example.
+*/
+class Entity1MockBuilder {
+  constructor(o = {}) { this.record = {...o}; }
+  get() { return this.record; }
+}
+
+class Entity2MockBuilder {
+  constructor(o = {}) { this.record = {...o}; }
+  withAnotherValue(value) { this.record.anotherValue = value; return this; }
+  get() { return this.record; }
+}
+
+class Entity3MockBuilder {
+  constructor(o = {}) { this.record = {...o}; }
+  get() { return this.record; }
+}
+
+/**
+ * Stand-in entity modules for Maddox (replace with real `@/server/entities/…`); methods must exist for `mockThisFunction`.
+ * These would generally live under `app/server/entities/`; they are inlined here for the example only.
+ */
+const Entity1 = { get() {}, getAll() {} };
+const Entity2 = { get() {}, getAll() {} };
+const Entity3 = { get() {}, getAll() {} };
+
+class ExampleModel {
+  static async get() {}
+  static async getByForeighKey() {}
+};
+
+const Scenario = Maddox.scenarios.FromPromiseScenario;
+
+// One describe block per Model
+describe("Given the ExampleModel `[ModelName]Model`, when", function () {
+
+  // One describe block per method.
+  describe("calling get `[methodName]`, it", function () {
+    let context;
+
+    beforeEach(() => {
+      // The hook body only resets `context` and defines functions on it. Nothing else runs here —
+      // no fixture wiring, params, or mocks outside those function bodies; each `it` calls the setup
+      // functions explicitly.
+      context = {};
+
+      context.setupValues = () => {
+        // All (or most) fixture values for this scenario; use mock builders when possible.
+        // `context.entity1`–`entity3` are domain rows (user-, athlete-, experience-shaped); they are
+        // not the same objects as the `Entity1` / `Entity2` / `Entity3` module stubs used in `mockThisFunction`.
+        context.entity1 = new Entity1MockBuilder().get();
+        context.entity2 = new Entity2MockBuilder({ userId: context.entity1.userId }).withAnotherValue("stub-another-value").get();
+        context.entity3 = new Entity3MockBuilder({ athleteUserId: context.entity1.userId }).get();
+      };
+
+      context.setupInputParams = () => {
+        context.inputParams = [context.entity3.id];
+      };
+
+      // One setup helper per .mockThisFunction — order matches the mock registration chain below.
+      //
+      // Use structuredClone (or equivalent deep copies) for mock return payloads and for
+      // expectedResponse: pass-by-reference means the code under test and the test can share the
+      // same object graph. Mutations then line up by identity and comparisons can pass when values
+      // should differ — false positives — or fail for the wrong reason. Cloning isolates each side
+      // so assertions are about data, not accidental reference aliasing.
+      //
+      // Each `setup<Action><Entity>` sets at minimum: (1) `*Params`, (2) `*Response`, (3) `*Error`.
+      context.setupGetEntity1 = () => {
+        context.entity1GetParams = [context.entity3.id];
+        context.entity1GetResponse = { Item: structuredClone(context.entity3) };
+        context.entity1GetError = new Error(`Entity1.get: ${Mock.getHash()}`);
+      };
+
+      context.setupGetAllEntity2 = () => {
+        context.entity2GetAllParams = [context.entity1.userId];
+        context.entity2GetAllResponse = { Item: structuredClone(context.entity1) };
+        context.entity2GetAllError = new Error(`Entity2.getAll: ${Mock.getHash()}`);
+      };
+
+      context.setupGetEntity3 = () => {
+        context.entity3GetParams = [context.entity1.userId];
+        context.entity3GetResponse = { Item: structuredClone(context.entity2) };
+        context.entity3GetError = new Error(`Entity3.get: ${Mock.getHash()}`);
+      };
+
+      context.setupResponse = () => {
+        const experienceType = { typeId: context.entity3.typeId, name: "stub-experience-type" };
+        const user = structuredClone(context.entity1);
+        const athlete = structuredClone(context.entity2);
+
+        const experienceTypes = { [experienceType.typeId]: experienceType };
+        const users = { [user.userId]: user };
+        const athletes = { [athlete.userId]: athlete };
+
+        context.expectedResponse = { experience: structuredClone(context.entity3), children: { experienceTypes, users, athletes } };
+      };
+    });
+
+    // "should [action] the [object]."
+    it("should get the experience.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetEntity1();
+      context.setupGetAllEntity2();
+      context.setupGetEntity3();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        /**
+         * Block order (blank line between groups):
+         *
+         * mockThisFunction — one line per unique (label, method), in order of **first use** in the
+         *   implementation (ordered-set semantics: same label/method again later does not get a
+         *   second registration).
+         *
+         * withEntryPoint / withInputParams
+         *
+         * shouldBeCalledWith + doesReturnWithPromise — one pair per **actual invocation order** in
+         *   the implementation; when each mock fires only once, this matches the mockThisFunction list.
+         *
+         * test / catch — success: assert no `err`, then assert `response`; failure: assert
+         *   `err.stack` messages, optional debug substrings, then `response === undefined`.
+         */
+        new Scenario(this)
+          // mockThisFunction: first-use order (Entity1.get → Entity2.getAll → Entity3.get).
+          .mockThisFunction("Entity1", "get", Entity1)
+          .mockThisFunction("Entity2", "getAll", Entity2)
+          .mockThisFunction("Entity3", "get", Entity3)
+
+          .withEntryPoint(ExampleModel, "get")
+          .withInputParams(context.inputParams)
+
+          // Assertions: same order as runtime calls; here each dependency runs once, so same as above.
+          .shouldBeCalledWith("Entity1", "get", context.entity1GetParams)
+          .doesReturnWithPromise("Entity1", "get", context.entity1GetResponse)
+
+          .shouldBeCalledWith("Entity2", "getAll", context.entity2GetAllParams)
+          .doesReturnWithPromise("Entity2", "getAll", context.entity2GetAllResponse)
+
+          .shouldBeCalledWith("Entity3", "get", context.entity3GetParams)
+          .doesReturnWithPromise("Entity3", "get", context.entity3GetResponse)
+
+          .test((err, response) => {
+            // Success: (1) no error, (2) response matches expected aggregate.
+            Maddox.compare.equal(err, undefined);
+            Maddox.compare.equal(response, context.expectedResponse);
+            resolve();
+          }).catch((err) => {reject(err.stack); })
+      });
+    });
+
+    // Failure cases follow the same order as `.mockThisFunction`: Entity1.get → Entity2.getAll → Entity3.get.
+    // "should handle error from [EntityName].[methodName].",
+    it("should handle error from Entity1.get.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetEntity1();
+      context.setupGetAllEntity2();
+      context.setupGetEntity3();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("Entity1", "get", Entity1)
+          .mockThisFunction("Entity2", "getAll", Entity2)
+          .mockThisFunction("Entity3", "get", Entity3)
+
+          .withEntryPoint(ExampleModel, "get")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("Entity1", "get", context.entity1GetParams)
+          .doesErrorWithPromise("Entity1", "get", context.entity1GetError)
+
+          .test((err, response) => {
+            // (1) `err.stack` contains expected message substring(s) (user-facing + upstream); one or more `containsError` checks.
+            Maddox.compare.containsError(err, "Could not get example model");
+            Maddox.compare.containsError(err, context.entity1GetError.message);
+            // (2) `err.stack` contains expected debug context from `Errr` / `.debug({ … })` (zero or more checks).
+            Maddox.compare.containsError(err, String(context.entity3.id));
+            // (3) Failed entry point — no return payload.
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          }).catch((err) => {reject(err.stack); })
+      });
+    });
+
+    // "should handle error from [EntityName].[methodName].",
+    it("should handle error from Entity2.getAll.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetEntity1();
+      context.setupGetAllEntity2();
+      context.setupGetEntity3();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("Entity1", "get", Entity1)
+          .mockThisFunction("Entity2", "getAll", Entity2)
+          .mockThisFunction("Entity3", "get", Entity3)
+
+          .withEntryPoint(ExampleModel, "get")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("Entity1", "get", context.entity1GetParams)
+          .doesReturnWithPromise("Entity1", "get", context.entity1GetResponse)
+
+          .shouldBeCalledWith("Entity2", "getAll", context.entity2GetAllParams)
+          .doesErrorWithPromise("Entity2", "getAll", context.entity2GetAllError)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, "Could not get example model");
+            Maddox.compare.containsError(err, context.entity2GetAllError.message);
+            // (2) Debug params on stack (`ExampleModel.get` uses `.debug({ experienceId })`).
+            Maddox.compare.containsError(err, String(context.entity3.id));
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          }).catch((err) => {reject(err.stack); })
+      });
+    });
+
+    // "should handle error from [EntityName].[methodName].",
+    it("should handle error from Entity3.get.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetEntity1();
+      context.setupGetAllEntity2();
+      context.setupGetEntity3();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("Entity1", "get", Entity1)
+          .mockThisFunction("Entity2", "getAll", Entity2)
+          .mockThisFunction("Entity3", "get", Entity3)
+
+          .withEntryPoint(ExampleModel, "get")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("Entity1", "get", context.entity1GetParams)
+          .doesReturnWithPromise("Entity1", "get", context.entity1GetResponse)
+
+          .shouldBeCalledWith("Entity2", "getAll", context.entity2GetAllParams)
+          .doesReturnWithPromise("Entity2", "getAll", context.entity2GetAllResponse)
+
+          .shouldBeCalledWith("Entity3", "get", context.entity3GetParams)
+          .doesErrorWithPromise("Entity3", "get", context.entity3GetError)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, "Could not get example model");
+            Maddox.compare.containsError(err, context.entity3GetError.message);
+            // (2) Debug params on stack (`ExampleModel.get` uses `.debug({ experienceId })`).
+            Maddox.compare.containsError(err, String(context.entity3.id));
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          }).catch((err) => {reject(err.stack); })
+      });
+    });
+  });
+
+  // After `Entity1.get`, `ExampleModel.getByForeignKey` loads `Entity2.getAll` and `Entity3.get` inside
+  // `Promise.all` — both run (order not guaranteed); failure cases below assert both `shouldBeCalledWith` for that pair.
+  describe("calling getByForeignKey [foreignKeyName], it", function () {
+    let context;
+
+    beforeEach(() => {
+      // The hook body only resets `context` and defines functions on it. Nothing else runs here —
+      // no fixture wiring, params, or mocks outside those function bodies; each `it` calls the setup
+      // functions explicitly.
+      context = {};
+
+      context.setupValues = () => {
+        // All (or most) fixture values for this scenario; use mock builders when possible.
+        // `context.entity1`–`entity3` are domain rows (user-, athlete-, experience-shaped); they are
+        // not the same objects as the `Entity1` / `Entity2` / `Entity3` module stubs used in `mockThisFunction`.
+        context.entity1 = new Entity1MockBuilder().get();
+        context.entity2 = new Entity2MockBuilder({ userId: context.entity1.userId }).withAnotherValue("stub-another-value").get();
+        context.entity3 = new Entity3MockBuilder({ athleteUserId: context.entity1.userId }).get();
+      };
+
+      context.setupInputParams = () => {
+        context.inputParams = [context.entity3.id];
+      };
+
+      // One setup helper per .mockThisFunction — order matches the mock registration chain below.
+      //
+      // Use structuredClone (or equivalent deep copies) for mock return payloads and for
+      // expectedResponse: pass-by-reference means the code under test and the test can share the
+      // same object graph. Mutations then line up by identity and comparisons can pass when values
+      // should differ — false positives — or fail for the wrong reason. Cloning isolates each side
+      // so assertions are about data, not accidental reference aliasing.
+      //
+      // Each `setup<Action><Entity>` sets at minimum: (1) `*Params`, (2) `*Response`, (3) `*Error`.
+      context.setupGetEntity1 = () => {
+        context.entity1GetParams = [context.entity3.id];
+        context.entity1GetResponse = { Item: structuredClone(context.entity3) };
+        context.entity1GetError = new Error(`Entity1.get: ${Mock.getHash()}`);
+      };
+
+      context.setupGetAllEntity2 = () => {
+        context.entity2GetAllParams = [context.entity1.userId];
+        context.entity2GetAllResponse = { Item: structuredClone(context.entity1) };
+        context.entity2GetAllError = new Error(`Entity2.getAll: ${Mock.getHash()}`);
+      };
+
+      context.setupGetEntity3 = () => {
+        context.entity3GetParams = [context.entity1.userId];
+        context.entity3GetResponse = { Item: structuredClone(context.entity2) };
+        context.entity3GetError = new Error(`Entity3.get: ${Mock.getHash()}`);
+      };
+
+      context.setupResponse = () => {
+        const experienceType = { typeId: context.entity3.typeId, name: "stub-experience-type" };
+        const user = structuredClone(context.entity1);
+        const athlete = structuredClone(context.entity2);
+
+        const experienceTypes = { [experienceType.typeId]: experienceType };
+        const users = { [user.userId]: user };
+        const athletes = { [athlete.userId]: athlete };
+
+        context.expectedResponse = { experience: structuredClone(context.entity3), children: { experienceTypes, users, athletes } };
+      };
+    });
+
+    // "should [action] the [object]."
+    it("should get the experience (parallel Entity2 + Entity3 after Entity1).", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetEntity1();
+      context.setupGetAllEntity2();
+      context.setupGetEntity3();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        /**
+         * Block order (blank line between groups):
+         *
+         * mockThisFunction
+         *
+         * withEntryPoint / withInputParams
+         *
+         * shouldBeCalledWith / doesReturnWithPromise — Entity1 first; Entity2 + Entity3 model a
+         *   `Promise.all` (both asserted; pick a stable order for the chain, e.g. registration order).
+         *
+         * test / catch
+         */
+        new Scenario(this)
+          // mockThisFunction: first-use order (Entity1.get → Entity2.getAll → Entity3.get).
+          .mockThisFunction("Entity1", "get", Entity1)
+          .mockThisFunction("Entity2", "getAll", Entity2)
+          .mockThisFunction("Entity3", "get", Entity3)
+
+          .withEntryPoint(ExampleModel, "getByForeignKey")
+          .withInputParams(context.inputParams)
+
+          // Assertions: Entity1 sequential, then parallel pair (both must appear when both run).
+          .shouldBeCalledWith("Entity1", "get", context.entity1GetParams)
+          .doesReturnWithPromise("Entity1", "get", context.entity1GetResponse)
+
+          .shouldBeCalledWith("Entity2", "getAll", context.entity2GetAllParams)
+          .doesReturnWithPromise("Entity2", "getAll", context.entity2GetAllResponse)
+
+          .shouldBeCalledWith("Entity3", "get", context.entity3GetParams)
+          .doesReturnWithPromise("Entity3", "get", context.entity3GetResponse)
+
+          .test((err, response) => {
+            // Success: (1) no error, (2) response matches expected aggregate.
+            Maddox.compare.equal(err, undefined);
+            Maddox.compare.equal(response, context.expectedResponse);
+            resolve();
+          }).catch((err) => {reject(err.stack); })
+      });
+    });
+
+    // Failure cases follow the same order as `.mockThisFunction`: Entity1.get → Entity2.getAll → Entity3.get.
+    // "should handle error from [EntityName].[methodName].",
+    it("should handle error from Entity1.get.", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetEntity1();
+      context.setupGetAllEntity2();
+      context.setupGetEntity3();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("Entity1", "get", Entity1)
+          .mockThisFunction("Entity2", "getAll", Entity2)
+          .mockThisFunction("Entity3", "get", Entity3)
+
+          .withEntryPoint(ExampleModel, "getByForeignKey")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("Entity1", "get", context.entity1GetParams)
+          .doesErrorWithPromise("Entity1", "get", context.entity1GetError)
+
+          .test((err, response) => {
+            // (1) `err.stack` contains expected message substring(s) (user-facing + upstream); one or more `containsError` checks.
+            Maddox.compare.containsError(err, "Could not get example model");
+            Maddox.compare.containsError(err, context.entity1GetError.message);
+            // (2) `err.stack` contains expected debug context from `Errr` / `.debug({ … })` (zero or more checks).
+            Maddox.compare.containsError(err, String(context.entity3.id));
+            // (3) Failed entry point — no return payload.
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          }).catch((err) => {reject(err.stack); })
+      });
+    });
+
+    // "should handle error from [EntityName].[methodName].",
+    it("should handle error from Entity2.getAll (Promise.all: still expect Entity3.get called).", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetEntity1();
+      context.setupGetAllEntity2();
+      context.setupGetEntity3();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("Entity1", "get", Entity1)
+          .mockThisFunction("Entity2", "getAll", Entity2)
+          .mockThisFunction("Entity3", "get", Entity3)
+
+          .withEntryPoint(ExampleModel, "getByForeignKey")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("Entity1", "get", context.entity1GetParams)
+          .doesReturnWithPromise("Entity1", "get", context.entity1GetResponse)
+
+          .shouldBeCalledWith("Entity2", "getAll", context.entity2GetAllParams)
+          .doesErrorWithPromise("Entity2", "getAll", context.entity2GetAllError)
+
+          .shouldBeCalledWith("Entity3", "get", context.entity3GetParams)
+          .doesReturnWithPromise("Entity3", "get", context.entity3GetResponse)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, "Could not get example model");
+            Maddox.compare.containsError(err, context.entity2GetAllError.message);
+            // (2) Debug params on stack (`ExampleModel.getByForeignKey` uses `.debug({ experienceId })`).
+            Maddox.compare.containsError(err, String(context.entity3.id));
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          }).catch((err) => {reject(err.stack); })
+      });
+    });
+
+    // "should handle error from [EntityName].[methodName].",
+    it("should handle error from Entity3.get (Promise.all: still expect Entity2.getAll called).", async function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupGetEntity1();
+      context.setupGetAllEntity2();
+      context.setupGetEntity3();
+      context.setupResponse();
+
+      await new Promise((resolve, reject) => {
+        new Scenario(this)
+          .mockThisFunction("Entity1", "get", Entity1)
+          .mockThisFunction("Entity2", "getAll", Entity2)
+          .mockThisFunction("Entity3", "get", Entity3)
+
+          .withEntryPoint(ExampleModel, "getByForeignKey")
+          .withInputParams(context.inputParams)
+
+          .shouldBeCalledWith("Entity1", "get", context.entity1GetParams)
+          .doesReturnWithPromise("Entity1", "get", context.entity1GetResponse)
+
+          .shouldBeCalledWith("Entity2", "getAll", context.entity2GetAllParams)
+          .doesReturnWithPromise("Entity2", "getAll", context.entity2GetAllResponse)
+
+          .shouldBeCalledWith("Entity3", "get", context.entity3GetParams)
+          .doesErrorWithPromise("Entity3", "get", context.entity3GetError)
+
+          .test((err, response) => {
+            // (1) Message(s) on stack
+            Maddox.compare.containsError(err, "Could not get example model");
+            Maddox.compare.containsError(err, context.entity3GetError.message);
+            // (2) Debug params on stack (`ExampleModel.getByForeignKey` uses `.debug({ experienceId })`).
+            Maddox.compare.containsError(err, String(context.entity3.id));
+            // (3) No successful response
+            Maddox.compare.equal(response, undefined);
+            resolve();
+          }).catch((err) => {reject(err.stack); })
+      });
+    });
+  });
+
+});
+```

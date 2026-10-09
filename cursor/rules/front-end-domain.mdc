@@ -1,0 +1,59 @@
+---
+description: How shared, data-aware components representing business objects (Domain) should be structured
+globs:
+  - "**/app/front-end/domain/**/*.{jsx,tsx}"
+alwaysApply: false
+---
+
+# Front-End Domain Components
+
+## Goal for this rule
+
+This rule defines the Domain component type in the front-end (e.g., `AccountRow`, `PlayerRow`, `WeekBadge`). Domain components are shared, data-aware components that represent core business objects. They are the "molecules" of the system.
+
+---
+
+## 1. Domain Component Responsibilities
+
+-   **Data Aware:** Domain components understand core business objects and their exact data shapes (e.g., they accept a `account` or `player` object as a prop).
+-   **Singular Mapping:** They map directly to properties of your backend **Domain Models** (e.g., reading `account.name` or `player.expectedPayment`). This ensures data representation is consistent across the entire system.
+-   **No Feature Context:** They represent the business object itself, not the specific feature or user flow (e.g., a `PlayerRow` renders a player's stats and name, but doesn't know if it's being rendered in the "Hold Wire Advice" tab or the "Member Review" tab).
+-   **No Direct Data Fetching:** Domain components must **never** fetch data or call proxies directly. They receive all data and event callbacks via props.
+-   **Composition:** They compose **Primitives** (e.g., a `PlayerRow` uses a Primitive `Avatar` and Primitive `Badge`).
+
+---
+
+## 2. Example Shape
+
+```jsx
+import React from "react";
+import PropTypes from "prop-types";
+
+import { Badge } from "@/front-end/primitives/badge.jsx";
+
+export const WeekBadge = ({ week, status }) => {
+  const isCompleted = status === "completed";
+  
+  return (
+    <div className="flex items-center gap-2 p-2 border rounded-lg border-slate-100 dark:border-slate-800">
+      <span className="text-sm font-medium text-slate-500">Week {week}</span>
+      <Badge variant={isCompleted ? "success" : "warning"}>
+        {isCompleted ? "Completed" : "In Progress"}
+      </Badge>
+    </div>
+  );
+};
+
+WeekBadge.propTypes = {
+  week: PropTypes.number.isRequired,
+  status: PropTypes.string.isRequired,
+};
+```
+
+---
+
+## 3. Verification & Testing
+
+-   **Component Specs:** Tested under `spec/app/front-end/domain/` using React Testing Library.
+-   **Props Validation:** Always define `propTypes` or TypeScript interfaces to enforce the domain model's shape.
+-   **RTL Assertions:** Verify that the component renders the domain properties (e.g., the correct week number and badge variant) based on the passed props.

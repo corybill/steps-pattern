@@ -1,0 +1,125 @@
+---
+description: Maddox Scenario tests for Remix/React Router route specs — UI rendering, loader/action mocks, and declarative setup
+globs:
+  - "**/app/routes/**/*.spec.jsx"
+alwaysApply: false
+---
+
+# Maddox Scenario tests — **Remix/Route UI**
+
+This guide covers **`Maddox.scenarios.FrameworkRouteScenario`** (alias **`RemixScenario`**), which drives **`react-router`** stubs and **React Testing Library (RTL)**.
+
+## Core Principles
+
+1.  **Route specs**: Hand-author tests in `{route}.spec.jsx`. Prefer a single file per route. Legacy `{route}.ai-driven.spec.jsx` siblings may still exist during the collapse campaign — do not create new ones. Do not add a `.spec.js` sibling (`enforce-ui-route-spec-singleton`). Do **not** run `maddox:generate`.
+2.  **Declarative Tests**: `it(...)` blocks must be strictly declarative. They should only contain `context.setup*()` calls, overrides, and the scenario chain. Move all `const` declarations, `await` calls, and logic into setup helpers.
+3.  **Mandatory `.render()`**: Every `RemixScenario` chain must call `.render()` before any `.next()` calls. This initializes the router and component lifecycle.
+4.  **Mocking on Scenario**: Use `.mockThisFunction(label, method, target)` on the scenario chain itself for all outbound calls (repositories, proxies, etc.). RemixScenario / FrameworkRouteScenario / ReactRouterFrameworkScenario specs may use Vitest `vi` for remount and host-global pins (`crypto.randomUUID`). Do not replace those Maddox collaborator mocks with `vi.spyOn` / `expect`.
+5.  **UI Validations**: Perform all DOM assertions inside `.next(async ({ screen }) => { ... })`. Validate specific data like stat tile counts, breadcrumbs, and empty states.
+6.  **Full call assertions**: `.shouldBeCalledWith` only, with a complete `context.*Params` **array**. NEVER `shouldBeCalledWithSubset` or `IgnoreParam`. Author the full matrix by hand; structural coverage rules enforce it (see `~/.cursor/skills/steps-engineer/MADDOX_AUTHORING.md`).
+
+## Setup Function Mapping
+
+Follow this order to satisfy ESLint rules:
+
+1.  **`setupValues`**: Shared IDs, mock data generation (e.g., `new AccountMock()`).
+2.  **`setupInputParams`**: Set `context.initialEntries` and `context.stubAppContext` (for `withStubAppContext`).
+3.  **Middle Helpers**: One helper per logical outbound call (e.g., `setupAccountsGetByUserId`).
+    *   Set `context.<name>Params` (array literal).
+    *   Set `context.<name>Response` (suffix **`Response`** required).
+4.  **`setupResponse`**: Set `context.expectedMaddoxErr = undefined`.
+
+## Worked Example
+
+```javascript
+// @vitest-environment jsdom
+import { cleanup } from "@testing-library/react";
+import Maddox from "maddox";
+import { afterEach, beforeEach, describe, it, vi } from "vitest";
+
+import * as Route from "@/routes/your-route/route.jsx";
+import MyRepo from "@/server/repositories/my-repo.js";
+import { ROUTE_IDS } from "../../mocks/route-stub-ids.js";
+
+const RemixScenario = Maddox.scenarios.FrameworkRouteScenario;
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("Given the your-route route, when", function () {
+  describe("rendering the route via RemixScenario, it", function () {
+    let context;
+
+    beforeEach(() => {
+      context = {};
+      context.setupValues = () => {
+        context.data = [{ id: "1", name: "Test" }];
+      };
+      context.setupInputParams = () => {
+        context.initialEntries = ["/your-route"];
+        context.stubAppContext = { /* auth/user info */ };
+        context.stubModule = Route;
+      };
+      context.setupMyRepoGet = () => {
+        context.myRepoGetParams = ["arg1"];
+        context.myRepoGetResponse = context.data;
+        context.myRepoGetError = new Error("Failed");
+      };
+      context.setupResponse = () => {
+        context.expectedMaddoxErr = undefined;
+      };
+    });
+
+    it("should render data from the repository.", function () {
+      context.setupValues();
+      context.setupInputParams();
+      context.setupMyRepoGet();
+      context.setupResponse();
+
+      return new Promise((resolve, reject) => {
+        new RemixScenario(this)
+          .mockThisFunction("MyRepo", "get", MyRepo)
+          .addStub({
+            mockName: "MyRoute",
+            path: "/your-route",
+            id: ROUTE_IDS.YOUR_ROUTE,
+            module: context.stubModule,
+          })
+          .withInitialEntries(context.initialEntries)
+          .withStubAppContext(context.stubAppContext)
+          .shouldBeCalledWith("MyRepo", "get", context.myRepoGetParams)
+          .doesReturnWithPromise("MyRepo", "get", context.myRepoGetResponse)
+          .render()
+          .next(async ({ screen }) => {
+            await screen.findByText("Test");
+            Maddox.compare.truthy(screen.getByText("Breadcrumb"));
+          })
+          .test((err) => {
+            Maddox.compare.equal(err, context.expectedMaddoxErr);
+            resolve();
+          })
+          .catch((e) => reject(e.stack));
+      });
+    });
+  });
+});
+```
+
+## Common Pitfalls
+
+*   **Error Coverage**: Every `mockThisFunction` requires a corresponding error test case to satisfy `enforce-maddox-coverage`.
+*   **`loaderData` Access**: In `.next(async ({ loaderData }) => ... )`, `loaderData` is keyed by route ID: `loaderData[ROUTE_IDS.YOUR_ROUTE]`.
+*   **Error Boundaries**: If a loader fails, the `err` in `.test()` might be `undefined` if an `ErrorBoundary` rendered. Assert on the error message in the DOM via `.next()`.
+*   **`addStub` Paths**: Always use **absolute paths** for child routes (e.g., `path: "/parent/:id/child"`) to ensure proper rendering in `<Outlet />`.
+*   **Multiple Calls to Same Mock**: If both a layout loader and a tab loader call the same repository method (e.g., `AccountsRepo.get`), you **must** call `.shouldBeCalledWith` and `.doesReturnWithPromise` twice on the scenario chain (two full `context.*Params` arrays). Failure to do so results in `Maddox Runtime Error (3001)`. NEVER collapse those into `shouldBeCalledWithSubset`.
+*   **UI Selector Ambiguity**: Text like "Draft" often appears in both navigation tabs and stat tiles. Use `getByRole` or `within()` scoped to a parent container to avoid "Found multiple elements" errors.
+*   **Mock Data State**: When testing state-dependent UI (e.g., `in_season` vs `drafting`), ensure the state is updated on the mock object *before* generating the response: `context.accountMock.status = "in_season"; context.accountResponse = context.accountMock.get();`.
+
+## Best Practices for UI Assertions
+
+1.  **Prefer `getByRole`**: Use `screen.getByRole('heading', { name: /Omni Conference/ })` instead of `screen.getByText` to be more specific and accessible.
+2.  **Explicit `within` Import**: `within` is not on the `screen` object. Import it from `@testing-library/react`.
+3.  **Wait for Content**: Use `await screen.findByText(...)` for the first assertion in a `.next()` block to ensure the component has finished rendering after the loader resolves.
+4.  **Check Class Names Safely**: If checking for styles (like `amber-400` highlights), use a helper that traverses parents if the class is applied to a wrapper.

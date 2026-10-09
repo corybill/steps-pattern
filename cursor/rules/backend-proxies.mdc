@@ -1,0 +1,75 @@
+---
+description: Proxy layer — all outbound requests go through proxies
+globs:
+  - "**/app/server/proxies/**/*.js"
+  - "**/app/server/steps/**/*.js"
+  - "**/app/server/entities/**/*.js"
+  - "**/src/proxies/**/*.js"
+  - "**/src/steps/**/*.js"
+  - "**/src/entities/**/*.js"
+alwaysApply: false
+---
+
+# Backend proxy layer
+
+## Goal for this rule
+
+This rule is defined so code can be written **exactly** as intended, with no feedback. When you receive feedback from the user, treat it as a signal to **update this rule** (and any related rules) so that next time you know precisely how they want things—no guesswork, no back-and-forth.
+
+## What counts as outbound
+
+- **HTTP/HTTPS** to external APIs (e.g. Partner API)
+- **Database** access (Postgres via Prisma, DynamoDB, etc.)
+- **Auth / identity** (e.g. Auth: getAuth, getUser, createUser)
+- **Other external services** (email, storage, etc.)
+- **Browser APIs** (extension storage, tabs, scripting, cookies, runtime manifest). Chromium hosts use the `chrome.*` namespace (Chrome, Edge, Brave, Opera). Call `ChromeStorageProxy` (and later sibling browser proxies) — never `chrome.*` / `browser.*` from a Step. Proposed lint: `steps-pattern/enforce-no-browser-api-outside-proxy`.
+- Optional: **time / date** or **environment** can go through a proxy (e.g. DateProxy, Global) so behavior is consistent and testable.
+
+If it leaves the current process (network, disk, system time, env vars for secrets, the browser), it should go through a proxy rather than being called directly from a step or entity.
+
+## What does not belong on a proxy
+
+A public Proxy method is allowed only when it matches one of these:
+
+1. **Leaves the process** — HTTP, SDK, queue, DB, browser API, disk.
+2. **Uncontrollable dynamic** — wall clock / similar (`DateProxy.getDateIsoString`). Maddox mocks `DateProxy`, not `Date.now()`.
+
+In-process work does **not** become a Proxy method so `enforce-outbound-class-method-call` will pass. That lint means “call outbound as `Class.method`.” It does **not** mean “move predicates onto the Proxy.” Put Errr flag reads, retry caps, and DelaySeconds math on the Step (Command). Keep wire-error classification **private** inside the Adapter that wraps the response (`.set("isSearchWriteThrottled", true)`). Do not extract a helper bag (`queue-retry`, `utils`) for the same leftover.
+
+## One proxy per external system
+
+- **PostgresProxy** – Prisma client, `generateId` / `generateReadableId`. **Entities (and only entities)** use this for all Postgres access. It must never be called by Steps or Models.
+- **AuthProxy** – Auth auth (getAuth, getUser, createSignInToken).
+- **PartnerProxy** – Partner API. `enforce-no-partner-api-in-ui` allowlists **public Partner HTTP paths by workspace type** (`eslint-config/partner-api-allowlists.js`). Remix: `/v1/user/*` only. Lambda: listed sync + valuations paths. ShareableModule: none. Do not call a Partner path that is not on the shape list.
+- **Configuration / env:** Only `Global.{js,ts}` may read `process.env` (`enforce-no-process-env-except-global`). Specs are exempt. Proxies read config through Global, not raw `process.env`.
+- **Fan-out bounds:** A `for` that calls a proxy must not use a hard-coded N ≥ 4 (`enforce-injectable-bounded-fanout`). Inject the bound from Global/config so tests can pin a small N.
+- **DateProxy** – e.g. `getDateIsoString()` for current time.
+- **ChromeStorageProxy** – Chromium `chrome.storage.local` (get / set / remove). Maddox mocks this proxy; that unique `mockThisFunction` counts toward `enforce-maddox-scenario-mock-surface`. Do not keep a global `mockStorage` to hide the outbound.
+- **SqsProxy / SqsValuationsProxy** — every payload must have a non-empty `type` string. Reject otherwise. Stamp `trace_id` and `message_type` on SQS `MessageAttributes`.
+- **MetricsProxy** (queue consumers) — every emit includes `message_type` (properties, else ALS context, else `null`). A `null` `properties.message_type` must not wipe ALS `message_type`.
+
+Add a new proxy (or a new method on an existing proxy) whenever you introduce a new outbound dependency. Do not add direct `fetch`, DB client, or SDK usage in steps or entities.
+
+## Proxy responsibilities
+
+- **Thin wrapper:** The proxy’s job is to make the outbound call and normalize errors. It should not contain business logic; keep logic in steps and composition in models. Do not add `is*` / `getMax*` / `compute*` class methods for in-process policy.
+- **Static methods:** Proxies expose static methods (e.g. `PartnerProxy.getAccount({ accountId })`, `PostgresProxy.getPrismaClient()`, `AuthProxy.getAuth(args)`).
+- **Error handling:** Use **Errr** for failures: `Errr.newError("Could not ...").appendTo(err).debug({ ... }).throw();` so callers get consistent, debuggable errors. The proxy can also validate response shape (e.g. `response.ok` for fetch) and throw with context before returning.
+- **Configuration:** Proxies may use env or a shared config (e.g. Global) for URLs, keys, or region. Do not hardcode secrets; read from config/env inside the proxy.
+
+## Naming and location
+
+- File name: kebab-case, e.g. `postgres-proxy.js`, `auth-proxy.js`, `partner-proxy.js`.
+- Class name: PascalCase + `Proxy`, e.g. `PostgresProxy`, `AuthProxy`, `PartnerProxy`.
+- Export only the proxy class: `export default ProxyName;`
+
+## Who calls the proxy
+
+- **Entities** call the DB proxy (PostgresProxy) for all reads/writes. No raw Prisma usage outside the proxy.
+- **Steps** (or modules) call other proxies (AuthProxy, PartnerProxy, etc.) when they need auth or external API data. Steps never call `fetch` or an SDK directly for outbound requests.
+
+## Summary
+
+- **All outbound requests go through the proxy layer.** No direct fetch, DB client, or auth SDK usage in steps or entities.
+- One proxy per external system; static methods; thin wrapper with Errr for errors; no business logic in the proxy.
+- Steps and entities depend on proxies, not on the outside world directly.

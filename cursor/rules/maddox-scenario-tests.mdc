@@ -1,0 +1,97 @@
+---
+description: Shared Maddox FromPromiseScenario conventions for route, model, module, and sync specs
+globs:
+  - "**/spec/api/routes/**/*.spec.js"
+  - "**/spec/api/models/**/*.spec.js"
+  - "**/spec/api/modules/**/*.spec.js"
+  - "**/spec/**/*.spec.js"
+alwaysApply: false
+---
+
+# Maddox Scenario tests (shared conventions)
+
+Layer-specific mocking, file layout, and **worked example suites** (inline JavaScript) live in:
+
+- [Route tests](maddox-route-scenario-tests.mdc)
+- [Model tests](maddox-model-scenario-tests.mdc)
+- [Module tests](maddox-module-scenario-tests.mdc)
+
+## Goal for these rules
+
+They exist so code can be written **exactly** as intended, with no feedback. When you receive feedback from the user, treat it as a signal to **update this file and the relevant layer rule** (and examples if needed) so that next time you know precisely how they want things—no guesswork, no back-and-forth.
+
+Use [Maddox](https://github.com/corybill/maddox) (see [docs](https://maddox.readme.io/docs/i-should-be-using-maddox-because)) with `FromPromiseScenario`.
+
+**Living rules:** When creating or updating Maddox test files, also update **this file** whenever feedback reveals **shared** gaps (structure, ordering, scenario chain, sync harness). Update the **layer rule** (including its inline worked example block) when feedback is specific to routes, models, or modules. The goal is that full test files can be generated to match these conventions without further feedback.
+
+**First write:** Do not generate a spec from this prose. For Route / Controller / Module ingress, hand-author `{name}.spec.jsx` / `{name}.spec.js` under `calling <method>, it`. Do **not** run `maddox:generate`. Cover **all success and failure paths** in the same execute pass as the production change. Prefer a single spec file per route; legacy `{name}.ai-driven.spec.*` siblings are transitional. Follow `~/.cursor/skills/steps-engineer/MADDOX_AUTHORING.md`. ESLint (`maddoxSpecs()`) is the source of truth — if this file disagrees with a `steps-pattern/enforce-maddox-*` or `enforce-no-maddox-*` rule, update this file.
+
+## Context and setup functions
+
+- **Module specs (`spec/**/modules/**/*.spec.js`):** Use **two** levels of `describe`; the **outer** block has **no** `beforeEach` or `it`; each **inner** `describe` has its own `beforeEach` with `context = {}` and `context.setup…` attachments. See [Module tests](maddox-module-scenario-tests.mdc#file-and-describe-structure).
+- **Describe titles (ESLint: `steps-pattern/enforce-maddox-describe-structure`):** Outer `describe` starts with `Given ` and ends with `, when`. Nested `describe` ends with `, it`. Loader/action inners must be `calling the loader…, it` / `calling the action…, it` (compiler: `calling the loader (generated), it`).
+- **Single `context = {}`** in `beforeEach`. All context data is set **only via setup functions**. Never assign to `context` outside a setup function.
+- **`beforeEach` assignment order for `context.setup…` (ESLint: `steps-pattern/enforce-maddox-before-each-setup-order`):** Use **top-level** assignments only (`context.setupValues = () => { … }`, …). Order must be: **(1) `setupValues`** — IDs, rows, nested objects, mock builders (`new …MockBuilder().get()`), and other fixture fields the scenarios read; **(2) `setupInputParams`** — shapes passed to `withInputParams` (skip only when the suite has no such helper); **(3)** one **`setup<Action><Object>`** (or equivalent) per unique `.mockThisFunction(…)` in first-use order — each helper should define at least **`context.…Params`**, **`context.…Response`**, and **`context.…Error`** for that mock; **(4) `setupResponse`** last when used — full successful return from the entry point. If you use a file-scope helper (e.g. `context = await createModuleContext()`), it should still follow this order inside the helper when it attaches `context.setup*` functions.
+- **`FrameworkRouteScenario` (`*.framework-route.spec.js`):** Treat **`setupInputParams`** as **stub router inputs** — at minimum **`context.initialEntries`** (and optional stub **`AppLoadContext`** for **`withStubAppContext`**). Middle helpers target **`loader`** mocks on **`addStub`** modules only; name return values **`context.<mockName>LoaderResponse`** (not `…Return`) so **`doesReturnWithPromise(..., context.<name>LoaderResponse)`** satisfies **`enforce-maddox-boilerplate`**. See [Route tests — Maddox 5](maddox-route-scenario-tests.mdc).
+- **Middle setup helpers (ESLint warn: `steps-pattern/enforce-maddox-before-each-middle-setup-content`):** Do not assign **`context.inputParams`** or **`context.expected…` + `Response` / `Result` / `Error`** inside a per-mock helper between `setupInputParams` and `setupResponse`. Put those on `setupInputParams` / `setupResponse` instead. Exception: helpers whose names include **`Args`** may assign `context.inputParams` (e.g. `setupLoaderArgs…` called after `setupInputParams()` in each `it`). Mock call shapes like `context.getByUserIdParams` / `context.getByUserIdResponse` stay in the middle helpers.
+- **Setup method naming:** `setupValues()` (test data), `setupInputParams()` (entry-point args), `setup[DepName]()` per mocked dependency (e.g. `setupGetAuth`, `setupGetOrderModel`), `setupResponse()` (expected response/status). Each setup sets `context.[name]Params`, `context.[name]Response`, `context.[name]Error`.
+- **One dependency per setup function.** Each setup declares inputs and expected outputs for a single mocked dependency.
+- **Error messages in context:** Use a unique message including dependency and method, e.g. `` new Error(`AuthProxy.getAuth: ${Mock.getHash()}`) `` or `` new Error(`Users.get: ${context.testId}`) `` so assertions can use `Maddox.compare.containsError(err, context.xxxError.message)`.
+- **No parameters on setup functions** unless explicitly approved. Setup functions take no arguments.
+- **To drive a different scenario:** Override a setup in the test by reassigning it (e.g. `context.setupResponse = () => { … }`). Do not add ad-hoc context mutations. Every setup used in an `it` must already be defined in the same `beforeEach`; tests only override, they do not introduce new setup functions.
+- **Overrides before setup executions:** In each `it`, perform any setup overrides (reassigning `context.setupX = () => { … }`) **first**; only then call the setup functions (e.g. `context.setupValues()`, `context.setupInputParams()`, …).
+- **Same setup order and same mock order per describe:** Within a `describe` (e.g. “calling the loader” or “calling the action”), every test should call the **exact same setup functions in the same order**. Every test that shares the same code path should use the **exact same `.mockThisFunction(…)` chain in the same order** in the Scenario. (Early-return or error paths that do not invoke dependencies may omit the mock chain.)
+
+## Test block contents
+
+Inside an `it` you may have only:
+
+1. **Calls to setup functions** (builds context).
+2. **A Scenario** (possibly wrapped in `await new Promise((resolve, reject) => { … })`).
+3. **Optionally:** one or more setup overrides (reassigning `context.setupX = () => { … }`).
+
+## Test order and scenario chain order
+
+- **Test order:** Success test(s) first, then failure tests. Order failure tests in the **same order the mocked functions are called** in the code (first-called dependency fails first).
+- **Scenario chain order:** The sequence of `.shouldBeCalledWith` / `.doesReturnWithPromise` (or `.doesErrorWithPromise`) must match the **order those functions are called** in the code under test. In error tests, chain only up to and including the call that errors.
+- **Route entry-point coverage:** For route specs, include a full suite for **every exported handler** from the route module. If the route exports both `loader` and `action`, the spec must exercise both with `.withEntryPoint(Route, "loader")` and `.withEntryPoint(Route, "action")`.
+- **Controller entry-point coverage (ESLint: `steps-pattern/enforce-maddox-controller-coverage`):** Treat **every public `static` method** on an exported controller class as an incoming "route" (e.g. each SQS message type that `routes.ts` dispatches to `PartnerSyncController.<method>` is its own route). The spec must include a full suite for each one with `.withEntryPoint(<ControllerClass>, "<methodName>")`. Adding a new controller method without an accompanying `describe("calling <method> (generated), it"` and/or `describe("calling <method> (AI-driven), it"`) block will fail lint.
+- **NEVER a Service entry point.** Route → Service → Steps → Modules. Maddox `withEntryPoint` is the route/controller (or a module when a step calls one). Do not add `spec/services/` or `withEntryPoint(SomeService, …)` when a route or controller exists. Enforced by `enforce-no-service-entry-point-in-maddox-spec`.
+
+## Intentionally swallowed errors
+
+When code **catches an error and continues** (e.g. per-item or per-week try/catch that logs and moves on), **still add a test**. The test verifies: (1) the proxy/dependency throws, (2) the remaining calls in the scenario are still made, and (3) the handler still returns the **expected success output** (or the route’s success shape—whatever the entry point promises). Use `.doesErrorWithPromise` for the call that throws, then continue the chain with `.doesReturnWithPromise` for all subsequent calls, and assert `Maddox.compare.equal(response, context.expectedResponse)`. Do not skip these tests; they document that the “error is swallowed and processing continues” behavior is correct.
+
+## Parallel `Promise.all`
+
+When the code under test uses `Promise.all([…])` over mocked calls, **every** branch is invoked (even if one rejects). Failure-path scenarios must still chain `shouldBeCalledWith` / `doesReturnWithPromise` (or `doesErrorWithPromise`) for **all** parallel calls in source order, or Maddox will error with missing mock data for a sibling call.
+
+## Scenario chain
+
+Always assert mock arguments with **`.shouldBeCalledWith("Name", "method", context.xxxParams)`** and a full params **array** (deep equality). ESLint forbids weaker forms:
+
+- **NEVER** `.shouldBeCalledWithSubset` (`enforce-no-maddox-should-be-called-with-subset`).
+- **NEVER** `Maddox.constants.IgnoreParam` / `IgnoreParams` (`enforce-no-maddox-ignore-param`).
+- **NEVER** `.shouldBeCalled("Name", "method")` with no argument list.
+
+If the same mock is invoked twice, chain `.shouldBeCalledWith` **twice** with two `context.*Params` arrays. If an argument list feels too large to specify, split the production Step — do not weaken the assertion.
+
+### Chain structure
+
+1. `.mockThisFunction("DisplayName", "methodName", ActualModule)` for each dependency you are allowed to mock at this layer (see the **route / model / module** rule). For **route/controller** specs: mock models, entities, proxies, and modules that **steps** call; **never** mock the **service** or **steps**. **`PostgresProxy`** must never appear in a Maddox mock—mock **entities** instead.
+2. `.withEntryPoint(Module, "loader"|"action"|"get"|…)` and `.withInputParams(…)`. For **route and controller** specs, the argument **must** be exactly `context.inputParams` (no literals or other names); build the value in `setupInputParams` (`enforce-maddox-scenario-order` strict paths: `spec/app/routes/`, `spec/api/routes/`, `spec/api/controllers/`, `spec/controllers/`). **Model** specs use `context.inputParams`. **Module** specs (and similar) may use another `context.*Params` when that name is wired in `setupInputParams`. Chain **group order**: mocks → entry → expectations → execution → terminal, with a blank line between groups (and between consecutive `shouldBeCalledWith` / `next`).
+3. For each call (in execution order): `.shouldBeCalledWith("Name", "method", context.xxxParams)` then `.doesReturnWithPromise(…)` or `.doesErrorWithPromise(…)`.
+4. `.test((err, response) => { …; resolve(); }).catch((err) => { reject(err.stack); })`.
+
+Use `Maddox.compare.equal(err, undefined)` and `Maddox.compare.equal(response, context.expectedResponse)` for success. For errors use `Maddox.compare.containsError(err, "Could not get …")` for the wrap and `Maddox.compare.containsError(err, context.xxxError.message)` for the cause; `Maddox.compare.equal(response, undefined)`. Do not `equal(err.message, …)` — Errr `.debug()` must not change the assertion. NEVER `Maddox.compare.subset` / `.shouldBeCalledWithSubset` — `containsError` is the only error-string check.
+
+## sync suite
+
+The `sync` lambda has its own Maddox suite under `sync/spec/`. The structural rules above all still apply — same `Given the … when` describe nesting, single `context = {}`, setup-function-only assignment, success-then-failure ordering. A few specifics:
+
+- **Handler tests (`spec/handler/*.spec.js`):** mock the **service** the handler dispatches to (`PartnerSyncService.syncAccountPublicData` / `syncPrivateData`). The handler is too thin to be usefully tested with the service running, and the service in turn drives many `state.accept(Step)` calls that need their own steps-level specs.
+- **Lib tests (`spec/lib/*.spec.js`):** for **pure helpers** (e.g. `RouteRecord`), use plain vitest `expect` — no Maddox needed. For **persistence orchestrators** (e.g. `PersistRoutedTransaction`), follow the standard Maddox shape and mock the **entity classes** the orchestrator calls (`PartnerSales.save`, `PartnerSaleParticipants.deleteBySaleId/createMany`, …) in the **exact order** the source file calls them.
+- **Step tests (`spec/steps/*.spec.js`):** mock the **entity classes** the step calls and the **proxies** (e.g. `PartnerProxy.fetchAccount`). Do **not** mock the step under test. Never mock `PostgresProxy` or `Prisma`; always mock the Entity class that wraps them.
+- **Fixtures:** raw Partner API shapes live in `spec/mocks/partner-fixtures.js`. Use `PartnerFixtures.makeSale/makeHold/makeUnassigned/makeAdmin` in router and step tests instead of hand-rolled JSON, so we have one source of truth for what the GraphQL+REST APIs return.
+- **sync logged API fixtures:** Each distinct `HttpProxy.get` URL pattern and each GraphQL `operationName` used by sync has a small JSON descriptor under [`sync/spec/mocks/real-data/fixtures/`](sync/spec/mocks/real-data/fixtures/) (`version`, `id`, `kind`, `captureFile` under `real-data/`, plus `operationName` for GraphQL). [`load-partner-api-fixture.js`](sync/spec/mocks/load-partner-api-fixture.js) reads the linked file in [`partner-api-requests/`](sync/spec/mocks/real-data/partner-api-requests/) and materializes `httpGetParams` / `httpGraphqlParams` (with `partnerToken` substitution) and `mockReturn` for Maddox. **`entityMocks` / heavy composite shapes** belong in scenario setup or a colocated Maddox-oriented JSON—not in those per-operation `fixtures/*.json` descriptors.
+- **Mock helper:** the sync `Mock` (in `spec/mocks/mock.js`) is the same shape as the UI one — keep them in lock-step.

@@ -1,0 +1,46 @@
+---
+description: Repository layer for Postgres access (sync pattern)
+globs:
+  - "**/app/server/repositories/**/*.js"
+  - "**/src/repositories/**/*.js"
+alwaysApply: false
+---
+
+# Backend repositories
+
+- One repository module per persistence concern / table cluster; static methods encapsulate Prisma access via `PostgresProxy.getPrismaClient()` (app) or `SqliteProxy` (app).
+- **Only** files under `repositories/` import PostgresProxy, `@prisma/client`, or SqliteProxy / `better-sqlite3-multiple-ciphers` for DB work (plus specs as needed).
+- **Steps** orchestrate business logic and call repositories for reads and writes. Avoid Prisma in strategies and other helpers — pass repository instances or callbacks from the step via context when needed.
+- Relational reads may use Prisma **`include`** / **`select`** with nested relations inside repositories when that keeps round-trips and composition clear; steps stay free of raw Prisma.
+
+## Bulk writes (collect-then-bulk)
+
+`steps-pattern/enforce-no-repo-writes-in-loops` only guarantees that **Steps/Strategies** call one bulk method. The repository is responsible for making that method a **real bulk write**.
+
+**Required:** persist many rows with **parameterized** SQL (or Prisma `createMany` / `updateMany` when upsert is not needed). Prefer `$executeRawUnsafe` / `$queryRaw` with `$1`, `$2`, … placeholders and `unnest()`:
+
+```js
+await prisma.$executeRawUnsafe(`
+  INSERT INTO "SomeTable" ("id", "value")
+  SELECT * FROM unnest($1::text[], $2::int[]) AS batch("id", "value")
+  ON CONFLICT ("id") DO UPDATE SET
+    "value" = EXCLUDED."value",
+    "updatedAt" = NOW();
+`, ids, values);
+```
+
+Gold-standard examples: `Memberships.updatePlacesForAccount`, `BillingTransactions.linkTransactions`.
+
+**Allowed in repositories:** looping to **chunk** a large array, then one parameterized statement per chunk. `$transaction` around a delete-many + create-many is fine when that is the replace semantics.
+
+**Not bulk (do not ship this as `upsertMany`):**
+
+```js
+for (const item of items) {
+  await prisma.someTable.upsert({ where, create: item, update: item });
+}
+```
+
+That is still N round-trips. Moving the loop out of the Step satisfies the linter and **fails** this repository contract.
+
+**Not parameterized:** building `VALUES ('${id}', '${name}')` strings and passing them to `$executeRawUnsafe`. Quote-escaping is not a substitute for bind parameters.

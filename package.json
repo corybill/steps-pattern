@@ -1,0 +1,56 @@
+{
+  "name": "steps-pattern",
+  "version": "1.5.0",
+  "description": "ESLint plugin plus Cursor rules and the steps-engineer skill for the Steps Pattern and Maddox.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cross-workspace-import-patterns": "./lib/cross-workspace-import-patterns.js",
+    "./eslint-config": "./eslint-config/index.js"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "eslint-config",
+    "docs",
+    "cursor",
+    "skills",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "eslint",
+    "eslintplugin",
+    "steps-pattern",
+    "maddox"
+  ],
+  "author": "Cory Parrish",
+  "license": "MIT",
+  "peerDependencies": {
+    "@eslint/js": ">=9.0.0",
+    "eslint": ">=9.0.0",
+    "eslint-plugin-import": ">=2.0.0",
+    "globals": ">=15.0.0",
+    "typescript-eslint": ">=8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript-eslint": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/corybill/steps-pattern.git"
+  },
+  "bugs": {
+    "url": "https://github.com/corybill/steps-pattern/issues"
+  },
+  "homepage": "https://github.com/corybill/steps-pattern#readme"
+}

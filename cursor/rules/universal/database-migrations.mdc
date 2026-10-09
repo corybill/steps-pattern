@@ -1,0 +1,47 @@
+---
+description: PostgreSQL + Prisma schema evolution. Specifics (schema path, migration commands) come from .agent-context.json.
+globs:
+  - "**/prisma/schema.prisma"
+  - "**/prisma/migrations/**/*.sql"
+  - "**/repositories/**/*.{js,ts}"
+alwaysApply: false
+requires: [database]
+---
+
+# Database schema & migration workflow
+
+Resolve specifics from `.agent-context.json` at the repo root. If missing, run `steps-pattern bootstrap-context` first.
+
+- Engine: `${database.engine}` (this rule applies when `engine == "postgres"`).
+- Migration tool: `${database.migrationTool}`.
+- Schema file(s): `${database.schemaPaths[]}`.
+- Migrations dir: `${database.migrationsDir}`.
+- Dev-apply command: `${database.commands.migrateDev}`.
+- Prisma-client regenerate command: `${database.commands.generate}`.
+- Local CI command (lint + test): `${database.commands.ci}` (falls back to `pnpm run ci`).
+
+If this repo also exposes a `db-engineer` skill (installed by `steps-pattern install cursor-global`), load that skill before making schema changes.
+
+## 1. Plan (design & validate)
+- **NEVER** use `prisma db push` / `db:push` against staging or production. Always generate trackable SQL migration files via `${database.commands.migrateDev}`.
+- Identify query pathways and declare B-Tree indexes (`@@index`) for every relational field (foreign keys) when `relationMode = "prisma"`.
+- Set proper defaults for non-nullable fields on populated tables to prevent migration lockups.
+
+## 2. Do (apply schema changes)
+- Edit `${database.schemaPaths[0]}` (and others listed in `${database.schemaPaths}` if multi-schema).
+- Map models to their schema with `@@schema("<name>")` when the project uses `multiSchema`.
+- Generate the migration locally:
+  ```bash
+  ${database.commands.migrateDev} --name <migration_name>
+  ```
+
+## 3. Check (inspect SQL & run tests)
+- Open the generated `.sql` under `${database.migrationsDir}/` and verify clean DDL, correct index types, and the right dialect for `${database.engine}`.
+- Run local diagnostics: `${database.commands.ci}`.
+
+## 4. Act (commit)
+- Regenerate the client:
+  ```bash
+  ${database.commands.generate}
+  ```
+- **ALWAYS** commit all schema changes AND the generated migration folder to Git.

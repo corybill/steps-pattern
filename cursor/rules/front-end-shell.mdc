@@ -1,0 +1,60 @@
+---
+description: How global layout, navigation, and persistent UI elements (Shell) should be structured
+globs:
+  - "**/app/front-end/shell/**/*.{jsx,tsx}"
+alwaysApply: false
+---
+
+# Front-End Shell Components
+
+## Goal for this rule
+
+This rule defines the Shell component type in the front-end (e.g., `Sidebar`, `MainHeader`, `AdminSidebarSection`). Shell components represent the global layout, navigation framework, and persistent UI elements of the application.
+
+---
+
+## 1. Shell Component Responsibilities
+
+-   **Global Layout & Navigation:** Shell components define the frame of the application (e.g., the sidebars, headers, user profile menus, and footer elements).
+-   **State & Session Awareness:** They read global session state (such as the authenticated user's profile, active account selection, or notification counts) from the root loader data or global context.
+-   **Composition:** They compose **Primitives** (for layout structure) and **Domain Components** (e.g., rendering a `AccountRow` or `Avatar` inside the sidebar).
+-   **No Business Logic:** Shell components handle navigation and routing, but **never** business logic.
+-   **No Direct Data Mutations:** They trigger navigation or redirect actions, but never execute database writes or mutations directly.
+
+---
+
+## 2. Example Shape
+
+```jsx
+import React from "react";
+import { Link, useLocation } from "@remix-run/react";
+
+import { cn } from "@/front-end/lib/styles";
+import { Avatar } from "@/front-end/domain/users/avatar.jsx";
+
+export const MainHeader = ({ user }) => {
+  const location = useLocation();
+
+  return (
+    <header className="flex h-16 items-center justify-between border-b border-slate-100 px-6 dark:border-slate-800">
+      <div className="flex items-center gap-4">
+        <Link to="/" className="font-bold text-lg text-indigo-600">
+          app
+        </Link>
+      </div>
+      <div className="flex items-center gap-4">
+        <span className="text-sm text-slate-500">{user.email}</span>
+        <Avatar user={user} size="sm" />
+      </div>
+    </header>
+  );
+};
+```
+
+---
+
+## 3. Verification & Testing
+
+-   **RTL Navigation Assertions:** Tested under `spec/app/front-end/shell/` or inside global layout specs.
+-   **Active State Verification:** Verify that navigation links correctly apply active CSS classes (e.g., `text-indigo-600`) based on the current `location.pathname`.
+-   **Layout Integrity:** Verify that global elements (like the user avatar or logo) render correctly when session data is provided.

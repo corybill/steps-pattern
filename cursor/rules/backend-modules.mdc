@@ -1,0 +1,61 @@
+---
+description: How modules (reusable step sequences) should be structured
+globs:
+  - "**/app/server/modules/**/*.js"
+  - "**/src/modules/**/*.js"
+alwaysApply: false
+---
+
+# Backend modules
+
+## Goal for this rule
+
+This rule is defined so code can be written **exactly** as intended, with no feedback. When you receive feedback from the user, treat it as a signal to **update this rule** (and any related rules) so that next time you know precisely how they want things—no guesswork, no back-and-forth.
+
+**Modules** are used when you have a set of **reusable steps** or need to **iterate over the same set of steps** (e.g. “for each account, run this sequence”). **Services and modules can run steps.** A service (or another caller) invokes a module instead of duplicating that sequence. The module class itself is **essentially the same thing as a service**: it orchestrates steps, holds no business logic, and follows the same concepts. The same rules for **state** and **steps** apply to modules—state holds data, steps contain business logic and write only to state, outbound calls go through the proxy layer. **Modules do not create new proxies, entities, or models;** they reuse the top-level proxies, entities, and models.
+
+**Agent-tools:** Only `*Module` classes under `src/modules/` are Modules (e.g. `PartnerSaleWriteModule`). Catalog rows live in `src/catalog/`; MCP harness/fill defs live in `src/mcp/`. Do not treat catalog or MCP adapters as Modules. MCP ingress stays on Controllers.
+
+**Agent runtime:** Modules are `FillWriteCaptureModule` (fill `canUseTool` write capture) and `AgentTurnModule` (chat-turn accept chain). Chat/fill HTTP ingress stays Controller → Service. `AgentTurnService` accepts `InitTrace` then `CallAgentTurn`; that Call Step wraps `TraceProxy.traceTurn` around `AgentTurnModule.run`. MCP/harness assembly lives in Steps (`Create*Mcp`, `Build*Options`, `AuthorizeHarnessTool`), Strategies (`ChatHarnessOptions`, `FillHarnessOptions`, `ChatHarnessPermission`, `FillHarnessPermission`), and `AgentSdkProxy.createMcpServer`. Do not treat harness factories as Modules. Do not put `state.accept` inside a Step.
+
+## When to use a module
+
+- You have a **reusable sequence of steps** that multiple flows need (e.g. “get Partner user and save,” “load account data: members, users, bracket, then save”).
+- You need to **run the same steps repeatedly** (e.g. for each account, or for each week). The caller (often a step in a service flow) invokes the module in a loop or passes different options each time.
+- The steps are **domain-specific** to one integration or concern (e.g. Partner API); the module groups them and exposes a small API (e.g. `getUser`, `loadAccountData`, `loadWeeklyData`).
+- **Agent tools** (`modules/agent-tools/`): LLM function-calling flows that should follow the same step/state/module pattern. One **`AgentToolsModule`** class (`agent-tools.js`) exposes `runListUserAccounts`, `runGetMyAssignmentInAccount`, `runResolveItemIds`, etc. Each **`*.agent-tool.js`** file exports a tool class with static `name`, `getDeclaration`, and `execute` — `execute` delegates to the module. Steps call **`Search`** (and other shared entities) like other modules.
+
+## Module class = service-like
+
+- **No business logic in the module class.** Same as services: the module only runs steps via `state.accept(Step)` or `state.acceptAll([...])`, and returns from state (or nothing). All domain logic lives in steps. **Parallel-first:** `acceptAll` every per-item Step pair that has no data dependency. Sequential `accept` only when a later Step in that item reads an earlier write.
+- **Outbound calls go through the proxy.** Module steps use the **same** top-level proxies and entities (no new proxies, entities, or models in the module). No direct `fetch`, DB, or SDK usage in steps.
+- **State:** Flow-phase methods reuse the **caller’s `state`** (Call Step → `Module.method(state)`). Iterated / reusable APIs may take an options object and construct a module-owned state class (e.g. `PartnerState`) that lives in top-level `app/server/state/` (or `src/state/`), then accept steps and return from that state. Never put state files under the module directory.
+
+## File and structure
+
+- **One module per directory** (e.g. `modules/partner/`). The module class lives in the root of that directory (e.g. `partner.js`).
+- **Module state lives in the top-level `app/server/state/`** (e.g. `app/server/state/partner-state.js`), extending `State`, so it is reusable by any service/route/other module.
+- **Module steps live in the top-level `app/server/steps/`** (e.g. `app/server/steps/get-partner-members.js`), so steps are reusable across modules, services, and routes. Same step rules apply: one `next(state)` per step, business logic in steps, steps only write to state (never return a value), module steps use top-level proxies/entities/models.
+- Only the module class itself (e.g. `partner.js`) and tool-declaration glue (e.g. `*.agent-tool.js`, `index.js`, `agent-tool-types.js`) live in the module directory. Modules never have their own `steps/` or state subdirectories.
+- Class name: PascalCase + `Module`, e.g. `PartnerModule`. Export only the module class.
+
+## Methods
+
+- **Static async** methods. Two legal signatures (`enforce-service-orchestration` does **not** require modules to take `state` as the first argument — only Services must):
+  - **Flow phase:** `(state)` — same bag as the Service. Canonical for Call Step → Module method (`UserModule.fetchPartnerUser`, `UserIdentityModule.verifyBearer`).
+  - **Iterated / reusable API:** options object (e.g. `{ accountUsername }`, `{ account, accountUserId, week }`). Construct module state, run steps, return from state (or nothing). Canonical for a batch Step looping `Module.method(...)`.
+- **Ingress contract (required):** Every Module method with ingress params must call `Validator.validate(schema, ingress, debug)` on its own line inside `try` before `new *State` / `state.accept` (`steps-pattern/enforce-ingress-contract-validation`). Use Zod — not Preconditions. **`validate` returns the same input reference** (assert-only). Use `Validator.validateParsed` only for intentional DTO clones (rare in Modules). Flow-phase methods validate the State bag with shared **`stateSchema`** (identity-preserving object check from the package `validator.js` — Maddox stubs need not implement `accept`). Iterated APIs validate the options/context object. Do **not** coalesce `null` into `{}` in `Validator.validate` — pass the raw value. Maddox suites must include at least one `Validation Error` it (`enforce-maddox-validation-coverage`). Prefer `{ method }` (or other non-ALS keys) in Validator/Errr `.debug` — do not restate fields already on `LoggerProxy.runWithContext` (e.g. `user_id`, `partner_account_id`, `message_id`).
+- **Mid-flow invariants (not ingress):** Required-value asserts after a read use **`Preconditions.errr().shouldBe*(…).debug({…}).test()`** (`enforce-if-throw-use-precondition`). Never `if (!x) throw new Error` / `Errr.newError` for those checks; never Zod mid-flow.
+- Use `state.accept(Step)` and `state.acceptAll([...])` to run steps. **`acceptAll` is `Promise.all`.** Race independent siblings. Sequential `accept` only at a data-dependency barrier. Do **not** `await OtherModule.foo(state)` or `await ThisModule.otherMethod(state)` in the try body — those calls are not on the ESLint allowlist.
+- **Callers that iterate a Module MUST `Promise.all` independent items** (`items.map(item => Module.method(...))`). Serial `for-await Module.method` only for shared in-place mutation, required write order, or a dossier-documented rate-limit.
+- **More than one Step per method** (`enforce-module-min-steps`, **warn**): a Module method that accepts 0 or 1 Step is usually ceremony. Expand the accept chain, or keep the work in the Step. Do not invent a no-op sibling just to clear the warning.
+- **Same flat try-body contract as services** (`enforce-service-orchestration`): no `if` / `else` / `switch` / loops in the module method. Same-module reuse is via a Call Step that invokes another module method, or by accepting the leaf steps directly in a flat chain. Branching recipes: `docs/llm/lint-fixes/enforce-service-orchestration/`.
+
+## Who calls the module
+
+- **Services never call a module from the Service try body** (`await Module.foo(state)` is not on the `enforce-service-orchestration` allowlist). A **Call Step** (or a batch Step looping `Module.method`) invokes the module. Example: `CallGetPartnerUserIfUsername` → `UserModule.fetchPartnerUser(state)`, or a step that loops `AccountModule.loadAccountData({ account, accountUserId })`.
+
+## Summary
+
+- **Modules** = reusable or repeated step sequences; same concepts as services (no business logic in the class, logic in steps, outbound via proxy).
+- Flow-phase methods take the caller’s `state` and run a flat accept chain. Iterated APIs may construct module state from an options object. Use when you need a shared sequence or to iterate over the same steps.

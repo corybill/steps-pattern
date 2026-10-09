@@ -1,0 +1,50 @@
+---
+description: How state classes work and when to add data to state
+globs:
+  - "**/app/server/state/**/*.js"
+  - "**/src/state/**/*.js"
+alwaysApply: false
+---
+
+# Backend state classes
+
+## Goal for this rule
+
+This rule is defined so code can be written **exactly** as intended, with no feedback. When you receive feedback from the user, treat it as a signal to **update this rule** (and any related rules) so that next time you know precisely how they want things—no guesswork, no back-and-forth.
+
+## When to put data on state
+
+**Only add a piece of data to state when it is needed in the response or in another step.** Do not store intermediate or one-off values on state “just in case.” If a step computes something that is only used inside that step and never read by a later step or by the handler building the response, keep it as a local variable in the step and do not call `state.setX(...)`.
+
+- **Needed in the response:** The API handler (or something that builds the response) will read from state (e.g. `state.getAccounts()`, `state.getUserModel()`). Those values must be set on state by the steps that produce them.
+- **Needed in another step:** If step B needs a value that step A produces, step A should set it on state and step B should get it from state. That’s the only way steps communicate.
+- **Not needed elsewhere:** If only one step uses the value, keep it inside that step; do not add a getter/setter for it on the state class.
+
+When adding a new getter/setter to a state class, the bar is: “this value is read from state in the response or in at least one other step.”
+
+## State class structure
+
+- **State files should rarely have any logic in them.** They should **never** have business logic. They should usually be **basic getters and setters** (e.g. `getX()` / `setX(value)`). State can also hold **maps** and expose add/lookup via getters and setters (e.g. `getMap()`, `setMap(map)`, or `setMapEntry(key, value)`) when that’s the right shape for the flow.
+- **Base class (`State`):** Lives in `state/state.js`. Holds `args` (request, params, url), form/body parsing helpers, auth hydrated from `appAuthContext`, **user model** hydrated from `appUserModelContext` (`getUserModel` / `setUserModel`, plus `shouldSyncAuthUser` when used), and the `accept` / `acceptAll` / `acceptAllSettled` methods that run steps. **All flow-specific state classes extend only `State`**—no intermediate base classes (e.g. no `UserState`); shared behavior belongs on `State`.
+- **Flow-specific state classes:** e.g. `AccountState`, `AgentChatState`, or module-level state like `PartnerState`. Each extends `State` and adds getters/setters for the data that its flow needs to pass between steps or return in the response.
+- State classes are **data bags with accessors only.** Each property that is shared across steps or used in the response has a matching `setX` / `getX` pair.
+- **No `isDone` or `setDone` in State**: State classes must NEVER have `isDone` or `setDone` methods or properties. Control flow is a **flat** Service/Module `accept` chain (`enforce-service-orchestration`) or a thrown `Response` / `Errr` — never `if` / `setDone` in the orchestrator.
+- **Getter/setter shape (ESLint: `enforce-state-getter-setter-structure`):** each `getX` / `setX` is **one line** and the `get*`/`set*` methods are in **alphabetical order**. The rule applies to classes that `extends State`, and to files under `src/state/`.
+- **No Error Handling in State:** State classes must **never** have `setError` or `getError` methods. Errors should be thrown directly from steps or services using `Errr` or `Preconditions`.
+
+## Naming and location
+
+- File names: `state.js` (base), `account-state.js`, `agent-chat-state.js`, `partner-state.js`. Module-owned state still lives in top-level `app/server/state/` or `src/state/` — never under `modules/<name>/`.
+- Class names: `State`, `AccountState`, `AgentChatState`, `PartnerState`, etc.
+- Accessors: `setFoo` / `getFoo` for the same logical value. Use clear, domain-level names (e.g. `setAccountUserId`, `getAccountUserId`).
+
+## Constructor
+
+- Base `State` takes `args` (e.g. request, params) and sets up `this.args`, `this.request`, `this.params`, `this.url`.
+- Subclasses call `super(args)` (or `super()` when the flow is initialized with a different shape, e.g. options object) and may set initial values that are known at construction (e.g. `account`, `week` on `PartnerState`). Only set what is needed for the flow and the response.
+
+## Summary
+
+- State holds all shared data for a single backend execution.
+- **Add data to state only when it is needed in the response or in another step.** Otherwise keep it local to the step.
+- State files rarely have logic; never business logic. Usually basic getters and setters; state can also hold maps and expose them via getters/setters.

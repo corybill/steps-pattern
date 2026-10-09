@@ -1,0 +1,20 @@
+---
+description: Keep execution local and waits short; no Task/subagents unless the user explicitly asks.
+alwaysApply: true
+requires: []
+---
+
+# Agent execution
+
+Universal, context-free policy. No `.agent-context.json` lookups required.
+
+## Subagents (Task tool)
+- Do **not** use the Task tool / subagents unless the user explicitly asks (e.g. "use a subagent", "explore with Task", or named review skills like Bugbot / security-review).
+- Prefer Grep, Read, Glob, and Shell in this chat for codebase work.
+- Exception: only when the user clearly requests parallel/isolated agents.
+
+## Waiting on commands
+- Prefer foreground Shell with a realistic `block_until_ms` (expected runtime + small buffer, usually seconds to a few minutes).
+- If backgrounded: one early status check (15–60s), then short polls (30–60s). Cap total silent waiting; after ~2–3 minutes without useful progress, report status and ask whether to keep waiting.
+- **Never** set waits / `block_until_ms` to multi-hour maxima for routine lint/test/build.
+- Do not poll Task/subagent runs — rely on completion notifications when subagents were explicitly requested.

@@ -1,0 +1,100 @@
+---
+description: How backend strategies (save/update strategies) should be structured
+globs:
+  - "**/app/server/strategies/**/*.js"
+  - "**/src/strategies/**/*.js"
+alwaysApply: false
+---
+
+# Backend Strategies
+
+## Goal for this rule
+
+This rule defines the Strategy type in the backend (e.g., `update-expected-payment-strategy.js`, `dismiss-payment-strategy.js`). Strategies encapsulate interchangeable leaf writes. **Steps** pick and call `Strategy.execute(state)`. A Service/Module must not call a Strategy — that is not on the `enforce-service-orchestration` allowlist.
+
+---
+
+## 1. File and Class Structure
+
+-   **One strategy per file.**
+-   **File Name:** kebab-case, e.g., `update-expected-payment-strategy.js`.
+-   **Class Name:** PascalCase + `Strategy`, e.g., `UpdateExpectedPaymentStrategy`.
+-   **Location:** Strategies live in `app/server/strategies/<domain-concern>/` or `src/strategies/<domain-concern>/`.
+
+---
+
+## 2. Strategy Responsibilities
+
+A Strategy is responsible for executing a **single, dedicated business action** within a specific flow context.
+
+-   **Interface:** Strategies expose a single **static async** method: **`execute(state)`**.
+-   **State Interaction:** Like Steps, Strategies receive `state` as their only argument, read inputs from it (or from form/body parsing helpers), and write results back to it.
+-   **Validation:** Strategies use **`Preconditions.errr().shouldBe*(…).debug({…}).test()`** for required inputs before executing. Lint: `steps-pattern/enforce-if-throw-use-precondition` — do not `if (!x) throw new Error` / `Errr.newError`. Do **not** use `Validator.validate` / Zod for Strategy invariants (Zod stays on Controller / Parse* / Catalog ingress only).
+-   **Out-of-Process Calls:** Strategies must **never** call `PostgresProxy` or Prisma directly. They must use **Repositories** or **Entities** for database operations, and **Proxies** for external APIs.
+-   **No Service Calls:** Strategies are low-level execution blocks. They do not call Services.
+
+---
+
+## 3. Example Shape
+
+```javascript
+import Preconditions from "preconditions";
+import Errr from "errr";
+
+import BillingTransactionsRepo from "../../repositories/billing-transaction-repo.js";
+
+const preconditions = Preconditions.errr();
+
+class UpdateExpectedPaymentStrategy {
+  
+  static async execute(state) {
+    const accountId = state.getFromFormData("accountId") || state.getAccountId();
+    const billingAccountId = state.getFromFormData("billingAccountId");
+    const memberId = state.getFromFormData("memberId");
+    const memberSlotId = state.getFromFormData("memberSlotId");
+    const entryFee = state.getFromFormData("entryFee") ? Number(state.getFromFormData("entryFee")) : 50.0;
+    const note = state.getFromFormData("note");
+    const isPaidOverride = state.getFromFormData("isPaidOverride") === "true";
+
+    // 1. Trusted-pipeline invariants (not Zod ingress)
+    preconditions
+      .shouldBeDefined(accountId, "Account ID is required")
+      .shouldBeDefined(billingAccountId, "Billing account ID is required")
+      .shouldBeDefined(memberId, "Member ID is required")
+      .debug({ accountId, billingAccountId, memberId })
+      .test();
+
+    try {
+      // 2. Execute database operation via Repository (no Prisma directly)
+      await BillingTransactionsRepo.updateExpectedPayment(
+        billingAccountId,
+        memberId,
+        memberSlotId,
+        accountId,
+        entryFee,
+        note,
+        isPaidOverride
+      );
+
+      // 3. Write result directly to state
+      state.setResult({ success: true, message: "Expected payment updated successfully." });
+      
+    } catch (err) {
+      Errr.newError("UpdateExpectedPaymentStrategy failed")
+        .debug({ accountId, billingAccountId, memberId })
+        .appendTo(err)
+        .throw();
+    }
+  }
+}
+
+export default UpdateExpectedPaymentStrategy;
+```
+
+---
+
+## 4. Verification & Testing
+
+-   **Maddox Strategy Specs:** Strategies are tested as part of the Step or Module specs that invoke them, or have their own dedicated spec files under `spec/strategies/`.
+-   **What to Mock:** Mock the **Repositories**, **Entities**, and **Proxies** that the strategy calls.
+-   **No Database Calls:** Never let a strategy make real database calls during tests; always mock the repository layer.
